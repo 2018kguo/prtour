@@ -78,7 +78,7 @@ function loadRecap(dir) {
   let rc;
   try { rc = JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8')); } catch (e) { die(`${dir}/recap.json is not valid JSON: ${e.message}`); }
   const r = resolveRecap(rc);
-  for (const im of (rc.themes ?? []).flatMap((t) => t.images ?? [])) {
+  for (const im of (rc.workstreams ?? rc.themes ?? []).flatMap((t) => [...(t.images ?? []), t.compare?.before, t.compare?.after]).filter(Boolean)) {
     if (!im?.src || /^https?:/.test(im.src)) continue;
     im.abs = path.resolve(dir, im.src);
     if (!fs.existsSync(im.abs)) r.warnings.push(`image ${im.src} not found (paths are relative to ${rel(dir)})`);

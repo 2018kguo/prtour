@@ -76,7 +76,7 @@ renders in the HTML and PDF, as Mermaid on GitHub, and as text in the terminal
 (inline images in kitty, Ghostty, WezTerm and iTerm2).
 
 - `diagram` (top level or per chapter) is the before/after map: what calls what
-  after the change. Mark nodes `"change": "new"` or `"changed"`, and give each
+  after the change. Mark nodes `"change": "new"`, `"changed"` or `"removed"` (edges can be `"removed"` too; the Before view shows removed parts, After hides them), and give each
   the `chapter` that explains it. Use 3 to 8 nodes; it is a map, not a call
   graph. Edge labels are a word or two.
   `{"title": "Before / after", "caption": "Shared content reaches a thread", "nodes": [{"id": "a", "label": "MainActivity"}, {"id": "b", "label": "OnNewIntent", "change": "new", "chapter": 2}], "edges": [{"from": "a", "to": "b", "label": "intent"}]}`

@@ -68,7 +68,9 @@ export function diagramToggle(d, href = (n) => `#ch-${n}`, icons = null) {
   const has = (d.nodes ?? []).some((n) => n.change);
   return `<div class="dg-wrap" data-view="after">${has ? '<div class="dg-toggle tabs"><nav role="tablist"><button type="button" role="tab" data-dg="before" aria-selected="false">Before</button><button type="button" role="tab" data-dg="after" aria-selected="true">After</button></nav></div>' : ''}${svg}</div>`;
 }
-export const TOGGLE_CSS = `.dg-wrap{position:relative}.dg-toggle{position:absolute;top:-4px;right:0;z-index:1}.dg-toggle nav{transform:scale(.92);transform-origin:top right}
+export const TOGGLE_CSS = `.dg-removed.dg-box{fill:none;stroke:var(--muted-foreground);stroke-dasharray:4 3}.dg-n-removed .dg-label{fill:var(--muted-foreground);text-decoration:line-through}.dg-e-removed .dg-edge{stroke-dasharray:4 3}
+.dg-wrap[data-view=after] .dg-n-removed,.dg-wrap[data-view=after] .dg-e-removed{opacity:0}
+.dg-wrap{position:relative}.dg-toggle{display:flex;justify-content:flex-end;margin:-6px 0 8px}.dg-toggle nav{transform:scale(.92);transform-origin:top right}
 .dg-n,.dg-e,.dg-link{transition:opacity .25s}.dg-wrap[data-view=before] .dg-n-new,.dg-wrap[data-view=before] .dg-e-new{opacity:0}
 .dg-wrap[data-view=before] .dg-n-changed .dg-box{fill:var(--card);stroke:var(--border)}.dg-wrap[data-view=before] .dg-n-changed .dg-bar{opacity:0}`;
 export const TOGGLE_JS = `<script>document.addEventListener('click',e=>{const b=e.target.closest('[data-dg]');if(!b)return;const w=b.closest('.dg-wrap');w.dataset.view=b.dataset.dg;w.querySelectorAll('[data-dg]').forEach(x=>x.setAttribute('aria-selected',x===b))})</script>`;
@@ -79,7 +81,10 @@ export function diagramSVG(d, href = (n) => `#ch-${n}`, icons = null) {
   d = { ...d, nodes: d.nodes.map((n) => (n.icon && !icons?.has(n.icon) ? { ...n, icon: undefined } : n)) };
   const { nodes, edges, byId, width, height } = layout(d);
   const pad = 2;
+  const into = new Map();
   const paths = edges.map((e) => {
+    const k = into.get(e.to) ?? 0;
+    if (e.label) into.set(e.to, k + 1);
     const a = byId.get(e.from);
     const b = byId.get(e.to);
     const x1 = a.x + a.w;
@@ -92,12 +97,13 @@ export function diagramSVG(d, href = (n) => `#ch-${n}`, icons = null) {
     // Label sits on the last segment, just before the arrow, so labels from one source don't stack.
     const lw = String(e.label ?? '').length * 6.6;
     // A wrapping edge carries its label on the long run back to the left.
-    const [lx, ly] = x2 > x1 ? [Math.max(x1 + 20, x2 - lw - 10), y2 - 6] : [Math.max(4, x1 - lw - 4), b.y - GY / 2 - 5];
-    const fresh = a.change === 'new' || b.change === 'new' ? ' dg-e-new' : '';
+    // Labels into the same node stack upward instead of overlapping.
+    const [lx, ly] = x2 > x1 ? [Math.max(x1 + 20, x2 - lw - 10), y2 - 6 - k * 13] : [Math.max(4, x1 - lw - 4), b.y - GY / 2 - 5 - k * 13];
+    const fresh = e.change === 'removed' || a.change === 'removed' || b.change === 'removed' ? ' dg-e-removed' : e.change === 'new' || a.change === 'new' || b.change === 'new' ? ' dg-e-new' : '';
     return `<g class="dg-e${fresh}"><path d="${p}" class="dg-edge" marker-end="url(#dg-arrow)"/>${e.label ? `<text x="${lx}" y="${ly}" class="dg-elabel">${esc(e.label)}</text>` : ''}</g>`;
   }).join('');
   const boxes = nodes.map((n) => {
-    const cls = n.change === 'new' ? 'dg-new' : n.change === 'changed' ? 'dg-changed' : 'dg-old';
+    const cls = n.change === 'new' ? 'dg-new' : n.change === 'changed' ? 'dg-changed' : n.change === 'removed' ? 'dg-removed' : 'dg-old';
     const label = `${n.change === 'new' ? '+ ' : ''}${n.label}`;
     const chip = n.chapter ? `<rect x="${n.x + n.w - 34}" y="${n.y + 10}" width="24" height="20" rx="5" class="dg-chip"/><text x="${n.x + n.w - 22}" y="${n.y + 24}" class="dg-chiptext" text-anchor="middle">${String(n.chapter).padStart(2, '0')}</text>` : '';
     const body = `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${H}" rx="8" class="dg-box ${cls}"/>${n.change ? `<rect x="${n.x}" y="${n.y}" width="3" height="${H}" rx="1.5" class="dg-bar ${cls}"/>` : ''}${n.icon ? iconSVG(icons, n.icon, n.x + 12, n.y + 12, 16) : ''}<text x="${n.x + (n.icon ? 36 : 14)}" y="${n.y + 25}" class="dg-label">${esc(label)}</text>${chip}`;
@@ -110,7 +116,8 @@ export function diagramSVG(d, href = (n) => `#ch-${n}`, icons = null) {
 export function diagramMermaid(d) {
   if (!d?.nodes?.length) return '';
   const id = (s) => `n_${String(s).replace(/\W/g, '_')}`;
-  const q = (s) => `"${String(s).replace(/"/g, "'")}"`;
+  // Mermaid reads # as the start of an entity code, so write it as one.
+  const q = (s) => `"${String(s).replace(/"/g, "'").replace(/#/g, '#35;')}"`;
   return ['```mermaid', 'flowchart LR',
     ...d.nodes.map((n) => `  ${id(n.id)}[${q(`${n.change === 'new' ? '+ ' : ''}${n.label}${n.chapter ? ` (${n.chapter})` : ''}`)}]`),
     ...(d.edges ?? []).map((e) => `  ${id(e.from)} -->${e.label ? `|${q(e.label)}|` : ''} ${id(e.to)}`),

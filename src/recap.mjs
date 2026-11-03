@@ -86,9 +86,9 @@ function perDayChart(r) {
   const days = dayKeys(r);
   const per = days.map((d) => r.prs.filter((p) => day(p.mergedAt) === d));
   const max = Math.max(1, ...per.map((x) => x.length));
-  const colW = Math.min(96, Math.max(40, 560 / days.length));
+  const colW = Math.min(110, Math.max(44, 800 / days.length));
   const W = days.length * colW;
-  const H = 210;
+  const H = 240;
   const plot = H - 46;
   const bars = per.map((ps, i) => {
     let y = plot;
@@ -99,7 +99,7 @@ function perDayChart(r) {
     return `${segs}${ps.length ? `<text x="${i * colW + colW / 2}" y="${(y - 6).toFixed(1)}" text-anchor="middle" class="ch-v">${ps.length}</text>` : ''}<text x="${i * colW + colW / 2}" y="${H - 22}" text-anchor="middle" class="ch-l">${fmtDay(days[i], { weekday: 'short' })}</text><text x="${i * colW + colW / 2}" y="${H - 8}" text-anchor="middle" class="ch-l ch-d">${fmtDay(days[i], { month: 'short', day: 'numeric' })}</text>`;
   }).join('');
   const notes = Object.entries(r.rc.dayNotes ?? {}).filter(([d]) => days.includes(d));
-  return `<div class="perday"><svg class="chart" viewBox="0 0 ${W} ${H}" style="max-width:${W}px"><line x1="0" x2="${W}" y1="${plot}" y2="${plot}" class="ch-axis"/>${bars}</svg>${notes.length ? `<dl class="daynotes">${notes.map(([d, t]) => `<dt>${fmtDay(d, { weekday: 'short' })}</dt><dd>${esc(t)}</dd>`).join('')}</dl>` : ''}</div>`;
+  return `<div class="perday"><svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}"><line x1="0" x2="${W}" y1="${plot}" y2="${plot}" class="ch-axis"/>${bars}</svg>${notes.length ? `<dl class="daynotes">${notes.map(([d, t]) => `<dt>${fmtDay(d, { weekday: 'short' })}</dt><dd>${esc(t)}</dd>`).join('')}</dl>` : ''}</div>`;
 }
 
 // One row per agent lane, PRs as dots on a time axis, colored by workstream.
@@ -124,7 +124,7 @@ function swimlanes(r) {
     return `<text x="0" y="${y + 4}" class="sl-l">${esc(String(names[k] ?? k).slice(0, 30))}</text><text x="${L - 10}" y="${y + 4}" text-anchor="end" class="sl-n">${ps.length}</text><line x1="${L}" x2="${W - 16}" y1="${y}" y2="${y}" class="sl-track"/>${ps.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<a href="#pr-${p.number}"><circle cx="${X(Date.parse(p.mergedAt)).toFixed(1)}" cy="${y}" r="4.5" fill="${w?.color ?? 'var(--muted-foreground)'}" fill-opacity=".9"><title>#${p.number} ${esc(p.oneLiner || p.title)}</title></circle></a>`; }).join('')}`;
   }).join('');
   const ticks = dayKeys(r).map((d) => Date.parse(`${d}T12:00:00Z`)).filter((ms) => ms >= lo && ms <= hi).map((ms) => `<text x="${X(ms).toFixed(1)}" y="${H - 4}" text-anchor="middle" class="sl-n">${fmtDay(day(new Date(ms).toISOString()), { weekday: 'short' })}</text>`).join('');
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}">${body}${ticks}</svg>${restN ? `<p class="t-small t-muted">${rows.length - 12} more lanes opened ${restN} PRs.</p>` : ''}`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}">${body}${ticks}</svg>${restN ? `<p class="t-small t-muted">${rows.length - 12} more lanes opened ${restN} PRs.</p>` : ''}`;
 }
 
 function media(im) {
@@ -171,7 +171,7 @@ export function renderRecapHTML(r, o = {}) {
   const s = r.stats;
   const range = rc.since ? `${fmtDay(rc.since)}–${fmtDay(rc.until ?? day(r.prs.at(-1)?.mergedAt ?? rc.since), { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
   const eyebrow = [rc.repo, rc.author, range, rc.eyebrow].filter(Boolean).map(esc).join(' · ');
-  const metrics = (rc.metrics ?? []).map((m) => `<div class="metric">${m.icon ? `<div class="metric-ic">${iconHTML(r.icons, m.icon)}</div>` : ''}<div class="serif metric-v">${m.before != null ? `${esc(m.before)} → ${esc(m.after)}${m.unit ? ` ${esc(m.unit)}` : ''}` : esc(m.value)}</div><div class="metric-l">${esc(m.label)}</div></div>`).join('');
+  const metrics = (rc.metrics ?? []).map((m) => `<div class="metric">${m.icon ? `<div class="metric-ic">${iconHTML(r.icons, m.icon)}</div>` : ''}<div class="serif metric-v${String(m.before ?? '').length + String(m.after ?? m.value ?? '').length + String(m.unit ?? '').length > 15 ? ' long' : ''}">${m.before != null ? `${esc(m.before)} → ${esc(m.after)}${m.unit ? ` ${esc(m.unit)}` : ''}` : esc(m.value)}</div><div class="metric-l">${esc(m.label)}</div></div>`).join('');
   const table = `<table class="table wstable"><thead><tr><th>Workstream</th><th>Who feels it</th><th class="num">PRs</th><th>Headline result</th></tr></thead><tbody>${r.ws.map((w) => `<tr><td><a href="#ws-${w.i + 1}" class="ws-cell">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : `<span class="dot" style="--ws:${w.color}"></span>`}${esc(w.name)}</a></td><td class="t-muted">${esc(w.whoFeelsIt ?? '')}</td><td class="num">${w.items.length}</td><td>${esc(w.headline ?? '')}</td></tr>`).join('')}${r.rest.length ? `<tr><td class="t-muted">Everything else</td><td class="t-muted">${esc(rc.otherPrs ?? '')}</td><td class="num">${r.rest.length}</td><td></td></tr>` : ''}</tbody></table>`;
   const legend = `<div class="legend">${r.ws.map((w) => `<a href="#ws-${w.i + 1}" class="t-small"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a>`).join('')}</div>`;
   const lanes = swimlanes(r);
@@ -182,7 +182,7 @@ export function renderRecapHTML(r, o = {}) {
 <style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><main class="page doc">
 <header class="hero"><div class="eyebrow">${eyebrow}</div><h1 class="serif doc-title">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
 ${metrics ? `<div class="metrics panel">${metrics}</div>` : ''}
-<div class="panel chartbox"><div class="chart-h"><b>PRs merged per day</b><span class="t-small t-muted">${s.prs} PRs · ${counts(s.additions, s.deletions)}</span></div>${perDayChart(r)}${legend}</div>
+<div class="panel chartbox"><div class="chart-h"><b>PRs merged per day</b><span class="t-small t-muted">${s.prs} PRs · <span class="t-add">+${s.additions.toLocaleString()}</span> <span class="t-del">−${s.deletions.toLocaleString()}</span></span></div>${perDayChart(r)}${legend}</div>
 ${table}
 ${lanes ? `<div class="panel chartbox"><div class="chart-h"><b>Which agent lanes did the work</b><span class="t-small t-muted">one row per lane, each dot a merged PR</span></div>${lanes}</div>` : ''}
 ${r.ws.map((w, k) => section(w, k + 1, rc, r.icons)).join('\n')}
@@ -197,15 +197,15 @@ const RECAP_CSS = `
 .hero{padding:56px 0 24px;display:flex;flex-direction:column;gap:14px}.doc-title{font-size:38px;line-height:1.12;font-weight:700;margin:0;text-wrap:balance}
 .lede{font-size:18px;line-height:1.6;color:var(--muted-foreground)}.lede p{margin:0}
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px 32px;padding:28px;margin:12px 0 24px;background:var(--muted)}
-.metric-v{font-size:28px;line-height:1.1;font-weight:700;white-space:nowrap}.metric-l{font-size:13.5px;line-height:1.45;color:var(--muted-foreground);margin-top:6px}
+.metric-v{font-size:28px;line-height:1.12;font-weight:700;text-wrap:balance}.metric-v.long{font-size:22px}.metric-l{font-size:13.5px;line-height:1.45;color:var(--muted-foreground);margin-top:6px}
 .chartbox{padding:22px 24px;margin:0 0 24px}.chart-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
-.perday{display:flex;gap:24px;align-items:flex-end}.perday .chart{flex:1;min-width:0}
-.chart{width:100%;height:auto;display:block;font:11.5px var(--font-sans)}.ch-axis{stroke:var(--border)}.ch-v{fill:var(--foreground);font-weight:600;font-size:12px}.ch-l{fill:var(--muted-foreground)}.ch-d{font-size:10.5px}
-.daynotes{margin:0 0 30px;font-size:12.5px;display:grid;grid-template-columns:auto 1fr;gap:6px 10px;max-width:260px}.daynotes dt{font-weight:600}.daynotes dd{margin:0;color:var(--muted-foreground)}
+.perday{display:flex;flex-direction:column;gap:18px}.perday .chart{width:100%}
+.chart{width:100%;max-width:100%;height:auto;display:block;font:11.5px var(--font-sans)}.ch-axis{stroke:var(--border)}.ch-v{fill:var(--foreground);font-weight:600;font-size:12px}.ch-l{fill:var(--muted-foreground)}.ch-d{font-size:10.5px}
+.daynotes{margin:0;font-size:13px;display:grid;grid-template-columns:auto 1fr auto 1fr;gap:8px 12px;border-top:1px solid var(--border);padding-top:14px}.daynotes dt{font-weight:600}.daynotes dd{margin:0;color:var(--muted-foreground)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:999px;background:var(--ws);margin-right:8px;vertical-align:baseline}
 .sl-l{fill:var(--foreground);font-size:12px}.sl-n{fill:var(--muted-foreground);font-size:11px}.sl-track{stroke:var(--border)}
-.wstable{margin:8px 0 32px}.wstable td{vertical-align:top}.table .num{text-align:right;font-variant-numeric:tabular-nums}
+.wstable{margin:8px 0 32px;table-layout:auto;width:100%}.wstable td,.wstable th{vertical-align:top;white-space:normal}.wstable td:first-child{white-space:nowrap;width:30%}.wstable td:nth-child(2){width:20%}.wstable td:nth-child(4){width:44%}.table .num{text-align:right;font-variant-numeric:tabular-nums}
 .ws{padding-top:72px;display:flex;flex-direction:column;gap:18px}
 .ws-head{display:flex;align-items:center;gap:12px}.ws-head .ic-chip{color:var(--ws)}.ws-cell{display:inline-flex;align-items:center;gap:8px}.ws-cell .ic{color:var(--ws)}.metric-ic{color:var(--muted-foreground);margin-bottom:8px}.metric-ic .ic{width:20px;height:20px}
 .ws-tag{color:var(--ws)}.ws-title{font-size:30px;line-height:1.18;font-weight:700;margin:-8px 0 0;text-wrap:balance}
@@ -213,7 +213,7 @@ const RECAP_CSS = `
 .prose{font-size:15.5px;line-height:1.7}.prose p{margin:0 0 12px}.prose p:last-child{margin:0}
 a.pr{font-family:var(--font-mono);font-size:.88em;color:var(--ws,var(--primary));text-decoration:underline;text-underline-offset:2px}
 .callout-box{border:1.5px dashed var(--border);border-radius:var(--radius-lg);padding:18px 22px;font-size:14.5px;line-height:1.65}.callout-box .eyebrow{color:var(--ws);margin-bottom:8px}.callout-box p{margin:0}
-.results .table td,.results .table th{padding-top:10px;padding-bottom:10px}.results tr.last td{font-weight:600}
+.results .table td,.results .table th{padding-top:10px;padding-bottom:10px;white-space:normal}.results .table{width:100%}.results tr.last td{font-weight:600}
 .ws-h3{font-size:18px;font-weight:600;margin:10px 0 -6px}
 .why{background:color-mix(in oklab,var(--ws) 12%,var(--background));border-radius:var(--radius-lg);padding:18px 22px;font-size:15px;line-height:1.65}.why b{color:var(--ws)}
 .ws-prs{margin-top:4px}
@@ -221,6 +221,7 @@ a.pr{font-family:var(--font-mono);font-size:.88em;color:var(--ws,var(--primary))
 .cmp input{grid-area:1/1;align-self:stretch;width:100%;margin:0;opacity:0;cursor:ew-resize}.cmp::after{content:"";position:absolute;top:0;bottom:0;left:var(--x);width:2px;background:var(--primary);pointer-events:none}
 .cmp-tag{position:absolute;top:10px;font:500 11px var(--font-mono);background:var(--background);padding:2px 6px;border-radius:4px;pointer-events:none}.cmp-b{left:10px}.cmp-a{right:10px}
 .appendix{padding-top:64px}
+.ws .figure img{max-height:440px;object-fit:contain;background:var(--muted)}
 @media (max-width:760px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.perday{flex-direction:column;align-items:stretch}.doc-title{font-size:30px}}
 @media print{.doc{max-width:none}.ws{break-before:page;padding-top:0}.metrics,.chartbox{break-inside:avoid}.dg-toggle,.cmp input,.cmp-tag{display:none}.cmp-after{clip-path:none}.cmp>img:first-child{display:none}details.disclosure:not(.ws-prs){display:none}}
 `;
