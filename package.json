@@ -4,7 +4,7 @@
   "description": "Guided, agent-annotated PR reviews: chapters, numbered notes, noise hidden. One self-contained HTML file, Markdown, or terminal. Diffs by @pierre/diffs.",
   "type": "module",
   "bin": { "prtour": "bin/prtour.mjs" },
-  "files": ["bin", "src", "SKILL.md"],
+  "files": ["bin", "src", "SKILL.md", "README.md", "LICENSE"],
   "scripts": { "test": "node src/patch.mjs && node src/tour.mjs && node test/smoke.mjs" },
   "engines": { "node": ">=20" },
   "keywords": ["code-review", "diff", "pull-request", "agents", "claude", "codex"],
