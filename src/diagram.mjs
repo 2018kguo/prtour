@@ -58,7 +58,20 @@ function layout(d) {
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-export function diagramSVG(d) {
+// Before/After toggle: "before" hides new nodes and edges and shows changed
+// nodes in their old style. Needs TOGGLE_JS on the page.
+export function diagramToggle(d, href = (n) => `#ch-${n}`) {
+  const svg = diagramSVG(d, href);
+  if (!svg) return '';
+  const has = (d.nodes ?? []).some((n) => n.change);
+  return `<div class="dg-wrap" data-view="after">${has ? '<div class="dg-toggle tabs"><nav role="tablist"><button type="button" role="tab" data-dg="before" aria-selected="false">Before</button><button type="button" role="tab" data-dg="after" aria-selected="true">After</button></nav></div>' : ''}${svg}</div>`;
+}
+export const TOGGLE_CSS = `.dg-wrap{position:relative}.dg-toggle{position:absolute;top:-4px;right:0;z-index:1}.dg-toggle nav{transform:scale(.92);transform-origin:top right}
+.dg-n,.dg-e,.dg-link{transition:opacity .25s}.dg-wrap[data-view=before] .dg-n-new,.dg-wrap[data-view=before] .dg-e-new{opacity:0}
+.dg-wrap[data-view=before] .dg-n-changed .dg-box{fill:var(--card);stroke:var(--border)}.dg-wrap[data-view=before] .dg-n-changed .dg-bar{opacity:0}`;
+export const TOGGLE_JS = `<script>document.addEventListener('click',e=>{const b=e.target.closest('[data-dg]');if(!b)return;const w=b.closest('.dg-wrap');w.dataset.view=b.dataset.dg;w.querySelectorAll('[data-dg]').forEach(x=>x.setAttribute('aria-selected',x===b))})</script>`;
+
+export function diagramSVG(d, href = (n) => `#ch-${n}`) {
   if (!d?.nodes?.length) return '';
   const { nodes, edges, byId, width, height } = layout(d);
   const pad = 2;
@@ -76,14 +89,16 @@ export function diagramSVG(d) {
     const lw = String(e.label ?? '').length * 6.6;
     // A wrapping edge carries its label on the long run back to the left.
     const [lx, ly] = x2 > x1 ? [Math.max(x1 + 20, x2 - lw - 10), y2 - 6] : [Math.max(4, x1 - lw - 4), b.y - GY / 2 - 5];
-    return `<path d="${p}" class="dg-edge" marker-end="url(#dg-arrow)"/>${e.label ? `<text x="${lx}" y="${ly}" class="dg-elabel">${esc(e.label)}</text>` : ''}`;
+    const fresh = a.change === 'new' || b.change === 'new' ? ' dg-e-new' : '';
+    return `<g class="dg-e${fresh}"><path d="${p}" class="dg-edge" marker-end="url(#dg-arrow)"/>${e.label ? `<text x="${lx}" y="${ly}" class="dg-elabel">${esc(e.label)}</text>` : ''}</g>`;
   }).join('');
   const boxes = nodes.map((n) => {
     const cls = n.change === 'new' ? 'dg-new' : n.change === 'changed' ? 'dg-changed' : 'dg-old';
     const label = `${n.change === 'new' ? '+ ' : ''}${n.label}`;
     const chip = n.chapter ? `<rect x="${n.x + n.w - 34}" y="${n.y + 10}" width="24" height="20" rx="5" class="dg-chip"/><text x="${n.x + n.w - 22}" y="${n.y + 24}" class="dg-chiptext" text-anchor="middle">${String(n.chapter).padStart(2, '0')}</text>` : '';
     const body = `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${H}" rx="8" class="dg-box ${cls}"/>${n.change ? `<rect x="${n.x}" y="${n.y}" width="3" height="${H}" rx="1.5" class="dg-bar ${cls}"/>` : ''}<text x="${n.x + 14}" y="${n.y + 25}" class="dg-label">${esc(label)}</text>${chip}`;
-    return n.chapter ? `<a href="#ch-${n.chapter}" class="dg-link">${body}<title>Chapter ${n.chapter}</title></a>` : `<g>${body}</g>`;
+    const nc = n.change ? ` dg-n-${n.change}` : '';
+    return n.chapter ? `<a href="${href(n.chapter)}" class="dg-link${nc}">${body}<title>Chapter ${n.chapter}</title></a>` : `<g class="dg-n${nc}">${body}</g>`;
   }).join('');
   return `<svg class="dg" viewBox="${-pad} ${-pad - 14} ${width + pad * 2} ${height + pad * 2 + 14}" style="max-width:${width + pad * 2}px" role="img" aria-label="${esc(d.title ?? 'Before and after')}"><defs><marker id="dg-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8" class="dg-arrowhead"/></marker></defs>${paths}${boxes}</svg>`;
 }

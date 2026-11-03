@@ -1,16 +1,17 @@
-// Recap: what shipped across many PRs and days, for a human reader. Graphics
-// first (timeline, areas, theme cards with diagrams and images), one line per
-// PR, no diffs. recap.json is scaffolded from `gh`, then the agent writes the
-// themes and one-liners.
+// Recap: what shipped across many PRs and days, written as a workstream report
+// for humans. Each workstream tells what was wrong, the design call, the aha,
+// how it was proved, the trade, and why it matters, with its own visuals.
+// recap.json is scaffolded from `gh` (+ agent-lane context), then an agent
+// writes the workstreams. Pages are built from Basecoat components.
 import fs from 'node:fs';
 import { lint, stripCode } from './style.mjs';
-import { checkDiagram, diagramMermaid, diagramSVG, diagramTree } from './diagram.mjs';
-import { CSS, FONTS, THEME, counts, esc, ui } from './ui.mjs';
+import { TOGGLE_CSS, TOGGLE_JS, checkDiagram, diagramMermaid, diagramToggle, diagramTree } from './diagram.mjs';
+import { CSS, THEME, counts, esc, ui } from './ui.mjs';
 import { md } from './html.mjs';
 import { kindOf } from './tour.mjs';
 
-export const RECAP_BUDGET = { themes: 6 };
-const PALETTE = ['oklch(62.3% .214 259.815)', 'oklch(69.6% .17 162.48)', 'oklch(76.9% .188 70.08)', 'oklch(60.6% .25 292.717)', 'oklch(64.5% .246 16.439)', 'oklch(71.5% .143 215.221)'];
+export const RECAP_BUDGET = { workstreams: 10 };
+const PALETTE = ['oklch(55% .17 155)', 'oklch(58% .19 259)', 'oklch(70% .17 65)', 'oklch(56% .22 293)', 'oklch(60% .21 18)', 'oklch(62% .12 210)', 'oklch(55% .09 120)', 'oklch(52% .15 330)', 'oklch(64% .14 40)', 'oklch(50% .05 260)'];
 
 // Area = the first two path segments of where most of a PR's lines went, ignoring tests and generated files.
 export function areaOf(files) {
@@ -25,162 +26,218 @@ export function areaOf(files) {
 
 export function scaffoldRecap(prs, meta) {
   return {
-    kind: 'recap',
-    ...meta,
-    summary: '',
-    themes: [{ title: 'TODO(agent): group PRs by outcome', body: '', outcome: '', prs: prs.map((p) => p.number) }],
-    prs: prs.map((p) => ({
-      number: p.number, title: p.title, url: p.url, mergedAt: p.mergedAt, additions: p.additions, deletions: p.deletions,
-      files: p.changedFiles, area: areaOf(p.files), oneLiner: '', description: (p.body ?? '').slice(0, 1500),
-    })),
+    kind: 'recap', ...meta, eyebrow: 'For engineers', summary: '', metrics: [], dayNotes: {}, lanes: {},
+    workstreams: [{ name: 'TODO(agent)', title: 'Group PRs by outcome', whoFeelsIt: '', headline: '', before: '', prs: prs.map((p) => p.number) }],
+    prs: prs.map((p) => ({ number: p.number, title: p.title, url: p.url, author: p.author?.login, createdAt: p.createdAt, mergedAt: p.mergedAt,
+      additions: p.additions, deletions: p.deletions, files: p.changedFiles, area: areaOf(p.files), oneLiner: '', description: (p.body ?? '').slice(0, 1500) })),
   };
 }
+
+const TEXT_FIELDS = [['title', 90], ['name', 40], ['headline', 140], ['whoFeelsIt', 40], ['asked', 260], ['before', 900], ['designCall', 900], ['proof', 900], ['trade', 500], ['whyItMatters', 400]];
 
 export function resolveRecap(rc) {
   const warnings = [];
   const prs = (rc.prs ?? []).slice().sort((a, b) => String(a.mergedAt).localeCompare(String(b.mergedAt)));
   const byNum = new Map(prs.map((p) => [p.number, p]));
-  const themeOf = new Map();
-  const themes = (rc.themes ?? []).map((t, i) => {
-    for (const n of t.prs ?? []) {
-      if (!byNum.has(n)) warnings.push(`theme "${t.title}": #${n} is not in prs`);
-      else if (themeOf.has(n)) warnings.push(`#${n} is in two themes`);
-      else themeOf.set(n, i);
+  const wsOf = new Map();
+  const ws = (rc.workstreams ?? rc.themes ?? []).map((w, i) => {
+    for (const n of w.prs ?? []) {
+      if (!byNum.has(n)) warnings.push(`workstream "${w.name ?? w.title}": #${n} is not in prs`);
+      else if (wsOf.has(n)) warnings.push(`#${n} is in two workstreams`);
+      else wsOf.set(n, i);
     }
-    const ps = (t.prs ?? []).map((n) => byNum.get(n)).filter(Boolean);
-    return { ...t, i, color: PALETTE[i % PALETTE.length], items: ps, additions: ps.reduce((s, p) => s + p.additions, 0), deletions: ps.reduce((s, p) => s + p.deletions, 0) };
+    const items = (w.prs ?? []).map((n) => byNum.get(n)).filter(Boolean);
+    return { ...w, name: w.name ?? w.title, i, color: PALETTE[i % PALETTE.length], items, additions: items.reduce((s, p) => s + p.additions, 0), deletions: items.reduce((s, p) => s + p.deletions, 0) };
   });
-  const loose = prs.filter((p) => !themeOf.has(p.number));
-  if (loose.length) warnings.push(`${loose.length} PR(s) in no theme: ${loose.map((p) => `#${p.number}`).join(', ')}`);
-  if (themes.length > RECAP_BUDGET.themes) warnings.push(`${themes.length} themes (budget ${RECAP_BUDGET.themes}); merge related work`);
-  const texts = [['summary', [rc.summary ?? ''].flat().join('\n\n'), 600],
-    ...themes.flatMap((t) => [[`theme "${t.title}" title`, t.title, 70], [`theme "${t.title}"`, t.body, 360], [`theme "${t.title}" outcome`, t.outcome, 140]]),
-    ...prs.map((p) => [`#${p.number} oneLiner`, p.oneLiner, 140])];
+  const rest = prs.filter((p) => !wsOf.has(p.number));
+  if (rest.length && !rc.otherPrs) warnings.push(`${rest.length} PR(s) in no workstream: ${rest.slice(0, 20).map((p) => `#${p.number}`).join(', ')}${rest.length > 20 ? '…' : ''}. Place them, or set "otherPrs": "<one line on what they are>"`);
+  if (ws.length > RECAP_BUDGET.workstreams) warnings.push(`${ws.length} workstreams (budget ${RECAP_BUDGET.workstreams}); merge related work`);
+  const texts = [['summary', [rc.summary ?? ''].flat().join('\n\n'), 700], ...(rc.metrics ?? []).map((m) => ['metric label', m.label, 110]),
+    ...ws.flatMap((w) => [...TEXT_FIELDS.map(([k, max]) => [`"${w.name}" ${k}`, w[k], max]),
+      ...[w.aha ?? []].flat().map((a) => [`"${w.name}" aha`, a.body, 600]), ...(w.sections ?? []).map((x) => [`"${w.name}" section "${x.title}"`, x.body, 900])]),
+    ...prs.map((p) => [`#${p.number} oneLiner`, p.oneLiner, 160])];
   for (const [where, text, max] of texts) {
     for (const hit of lint(text)) warnings.push(`writing, ${where}: ${hit}`);
     if (stripCode(text).length > max) warnings.push(`writing, ${where}: ${stripCode(text).length} chars (max ${max}); say less`);
   }
-  for (const t of themes) warnings.push(...checkDiagram(t.diagram, 0).filter((w) => !w.includes('chapter')).map((w) => `theme "${t.title}" ${w}`));
-  const days = [...new Set(prs.map((p) => String(p.mergedAt).slice(0, 10)))];
+  for (const w of ws) warnings.push(...checkDiagram(w.diagram, 0).filter((x) => !x.includes('chapter')).map((x) => `"${w.name}" ${x}`));
+  const days = [...new Set(prs.map((p) => day(p.mergedAt)))];
   const stats = { prs: prs.length, additions: prs.reduce((s, p) => s + p.additions, 0), deletions: prs.reduce((s, p) => s + p.deletions, 0), days: days.length };
-  return { rc, prs, themes, themeOf, warnings, stats };
+  return { rc, prs, ws, themes: ws, wsOf, themeOf: wsOf, rest, warnings, stats };
 }
 
 const day = (iso) => String(iso).slice(0, 10);
 const fmtDay = (d, opts = { month: 'short', day: 'numeric' }) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
-
-function dayRange(r) {
+const dayKeys = (r) => {
   const first = r.rc.since ?? day(r.prs[0]?.mergedAt);
   const last = r.rc.until ?? day(r.prs.at(-1)?.mergedAt);
   const out = [];
   for (let d = new Date(`${first}T12:00:00Z`); day(d.toISOString()) <= last; d.setUTCDate(d.getUTCDate() + 1)) out.push(day(d.toISOString()));
   return out;
+};
+
+// "#123" in prose links to the PR.
+const prLinks = (html, rc) => html.replace(/(^|[^\w/&])#(\d{3,6})\b/g, (_, pre, n) => `${pre}<a class="pr" href="${rc.repo ? `https://github.com/${esc(rc.repo)}/pull/${n}` : `#pr-${n}`}">#${n}</a>`);
+const prose = (text, rc) => prLinks(md(text), rc);
+
+// Bars per day, stacked by workstream, value on top; notes to the right.
+function perDayChart(r) {
+  const days = dayKeys(r);
+  const per = days.map((d) => r.prs.filter((p) => day(p.mergedAt) === d));
+  const max = Math.max(1, ...per.map((x) => x.length));
+  const colW = Math.min(96, Math.max(40, 560 / days.length));
+  const W = days.length * colW;
+  const H = 210;
+  const plot = H - 46;
+  const bars = per.map((ps, i) => {
+    let y = plot;
+    const x0 = i * colW + colW * 0.18;
+    const bw = (colW * 0.64).toFixed(1);
+    const seg = (n, fill, extra = '') => { if (!n) return ''; const h = (n / max) * (plot - 24); y -= h; return `<rect x="${x0}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="${fill}"${extra}/>`; };
+    const segs = r.ws.map((w) => seg(ps.filter((p) => r.wsOf.get(p.number) === w.i).length, w.color)).join('') + seg(ps.filter((p) => !r.wsOf.has(p.number)).length, 'var(--muted-foreground)', ' opacity=".35"');
+    return `${segs}${ps.length ? `<text x="${i * colW + colW / 2}" y="${(y - 6).toFixed(1)}" text-anchor="middle" class="ch-v">${ps.length}</text>` : ''}<text x="${i * colW + colW / 2}" y="${H - 22}" text-anchor="middle" class="ch-l">${fmtDay(days[i], { weekday: 'short' })}</text><text x="${i * colW + colW / 2}" y="${H - 8}" text-anchor="middle" class="ch-l ch-d">${fmtDay(days[i], { month: 'short', day: 'numeric' })}</text>`;
+  }).join('');
+  const notes = Object.entries(r.rc.dayNotes ?? {}).filter(([d]) => days.includes(d));
+  return `<div class="perday"><svg class="chart" viewBox="0 0 ${W} ${H}" style="max-width:${W}px"><line x1="0" x2="${W}" y1="${plot}" y2="${plot}" class="ch-axis"/>${bars}</svg>${notes.length ? `<dl class="daynotes">${notes.map(([d, t]) => `<dt>${fmtDay(d, { weekday: 'short' })}</dt><dd>${esc(t)}</dd>`).join('')}</dl>` : ''}</div>`;
 }
 
-// A swarm on a time axis: x is when the PR merged, dots stack upward only
-// when they would overlap. A busy window under two days gets hour ticks.
-function timelineSVG(r) {
-  if (!r.prs.length) return '';
+// One row per agent lane, PRs as dots on a time axis, colored by workstream.
+function swimlanes(r) {
+  const byLane = new Map();
+  for (const p of r.prs) if (p.lane) byLane.set(p.lane, [...(byLane.get(p.lane) ?? []), p]);
+  if (!byLane.size) return '';
+  const rows = [...byLane].sort((a, b) => b[1].length - a[1].length);
+  const top = rows.slice(0, 12);
+  const restN = rows.slice(12).reduce((n, x) => n + x[1].length, 0);
   const t = r.prs.map((p) => Date.parse(p.mergedAt));
-  const lo0 = Math.min(...t);
-  const hi0 = Math.max(...t);
-  const short = hi0 - lo0 < 2 * 864e5;
-  const pad = short ? 36e5 : 864e5 / 2;
-  const lo = short ? lo0 - pad : Math.min(lo0, Date.parse(`${r.rc.since ?? day(r.prs[0].mergedAt)}T00:00:00Z`));
-  const hi = short ? hi0 + pad : Math.max(hi0, Date.parse(`${r.rc.until ?? day(r.prs.at(-1).mergedAt)}T23:59:59Z`));
-  const W = 720;
-  const X = (ms) => 16 + ((ms - lo) / Math.max(1, hi - lo)) * (W - 32);
-  const placed = [];
-  for (const p of r.prs) {
-    const rad = Math.min(10, 4 + Math.log10(1 + p.additions + p.deletions) * 1.5);
-    const x = X(Date.parse(p.mergedAt));
-    let y = rad;
-    // ponytail: O(n^2) collision bump; fine for the few hundred PRs a recap holds
-    for (let moved = true; moved;) { moved = false; for (const q of placed) { if (Math.hypot(q.x - x, q.y - y) < q.rad + rad + 1.5) { y = q.y + q.rad + rad + 1.5; moved = true; } } }
-    placed.push({ p, x, y, rad });
-  }
-  const top = Math.max(...placed.map((d) => d.y + d.rad)) + 6;
-  const H = top + 30;
-  const base = H - 26;
-  const ticks = [];
-  if (short) { for (let h = Math.ceil(lo / 36e5) * 36e5; h <= hi; h += 36e5 * (hi - lo > 18 * 36e5 ? 3 : 1)) ticks.push([h, new Date(h).toLocaleTimeString('en-US', { hour: 'numeric', timeZone: 'UTC' })]); }
-  else { for (let d = Date.parse(`${day(new Date(lo).toISOString())}T12:00:00Z`); d <= hi; d += 864e5) ticks.push([d, fmtDay(day(new Date(d).toISOString()), (hi - lo) / 864e5 > 10 ? { day: 'numeric' } : { weekday: 'short', day: 'numeric' })]); }
-  const dots = placed.map(({ p, x, y, rad }) => { const th = r.themes[r.themeOf.get(p.number)]; return `<a href="#pr-${p.number}"><circle cx="${x.toFixed(1)}" cy="${(base - 4 - y).toFixed(1)}" r="${rad.toFixed(1)}" fill="${th?.color ?? 'var(--muted-foreground)'}" fill-opacity=".85"><title>#${p.number} ${esc(p.oneLiner || p.title)}</title></circle></a>`; }).join('');
-  const tickEls = ticks.map(([ms, label]) => `<line x1="${X(ms)}" x2="${X(ms)}" y1="${base}" y2="${base + 4}" class="tl-axis"/><text x="${X(ms)}" y="${H - 6}" text-anchor="middle" class="tl-day">${label}</text>`).join('');
-  const note = short ? `<text x="${W - 16}" y="14" text-anchor="end" class="tl-day">${fmtDay(day(new Date(lo0).toISOString()), { weekday: 'long', month: 'short', day: 'numeric' })}, UTC</text>` : '';
-  return `<svg class="tl" viewBox="0 0 ${W} ${H}" role="img" aria-label="PRs by merge time">${note}<line x1="16" x2="${W - 16}" y1="${base}" y2="${base}" class="tl-axis"/>${tickEls}${dots}</svg>`;
-}
-
-function areaBars(r) {
-  const by = new Map();
-  for (const p of r.prs) by.set(p.area, (by.get(p.area) ?? 0) + p.additions + p.deletions);
-  const rows = [...by].sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const max = Math.max(1, ...rows.map((x) => x[1]));
-  return `<ul class="bars">${rows.map(([a, n]) => `<li><span class="bar-l t-mono">${esc(a)}</span><span class="bar"><i style="width:${Math.max(2, (100 * n) / max)}%"></i></span><span class="t-small t-muted bar-n">${n.toLocaleString()}</span></li>`).join('')}</ul>`;
+  const lo = Math.min(...t);
+  const hi = Math.max(...t);
+  const L = 200;
+  const W = 900;
+  const X = (ms) => L + ((ms - lo) / Math.max(1, hi - lo)) * (W - L - 16);
+  const RH = 26;
+  const H = top.length * RH + 30;
+  const names = r.rc.lanes ?? {};
+  const body = top.map(([k, ps], i) => {
+    const y = i * RH + 14;
+    return `<text x="0" y="${y + 4}" class="sl-l">${esc(String(names[k] ?? k).slice(0, 30))}</text><text x="${L - 10}" y="${y + 4}" text-anchor="end" class="sl-n">${ps.length}</text><line x1="${L}" x2="${W - 16}" y1="${y}" y2="${y}" class="sl-track"/>${ps.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<a href="#pr-${p.number}"><circle cx="${X(Date.parse(p.mergedAt)).toFixed(1)}" cy="${y}" r="4.5" fill="${w?.color ?? 'var(--muted-foreground)'}" fill-opacity=".9"><title>#${p.number} ${esc(p.oneLiner || p.title)}</title></circle></a>`; }).join('')}`;
+  }).join('');
+  const ticks = dayKeys(r).map((d) => Date.parse(`${d}T12:00:00Z`)).filter((ms) => ms >= lo && ms <= hi).map((ms) => `<text x="${X(ms).toFixed(1)}" y="${H - 4}" text-anchor="middle" class="sl-n">${fmtDay(day(new Date(ms).toISOString()), { weekday: 'short' })}</text>`).join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}">${body}${ticks}</svg>${restN ? `<p class="t-small t-muted">${rows.length - 12} more lanes opened ${restN} PRs.</p>` : ''}`;
 }
 
 function media(im) {
-  const ext = String(im.src).split('.').pop().toLowerCase();
+  const ext = String(im.src ?? '').split('.').pop().toLowerCase();
   const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', mp4: 'video/mp4', webm: 'video/webm' }[ext];
   const url = /^https?:/.test(im.src) ? im.src : im.abs && fs.existsSync(im.abs) ? `data:${mime};base64,${fs.readFileSync(im.abs).toString('base64')}` : null;
-  if (!url) return '';
-  return `<figure class="figure panel">${/^video/.test(mime ?? '') ? `<video src="${url}" controls muted loop playsinline></video>` : `<img src="${url}" alt="${esc(im.caption ?? '')}">`}${im.caption ? `<figcaption>${esc(im.caption)}</figcaption>` : ''}</figure>`;
+  return url ? { url, video: /^video/.test(mime ?? '') } : null;
+}
+const figure = (im) => { const m = media(im); return m ? `<figure class="figure panel">${m.video ? `<video src="${m.url}" controls muted loop playsinline></video>` : `<img src="${m.url}" alt="${esc(im.caption ?? '')}">`}${im.caption ? `<figcaption>${esc(im.caption)}</figcaption>` : ''}</figure>` : ''; };
+// Drag to compare two screenshots of the same thing.
+const compare = (c) => { const a = media(c.before ?? {}); const b = media(c.after ?? {}); return a && b ? `<figure class="figure panel"><div class="cmp" style="--x:50%"><img src="${a.url}" alt="before"><img src="${b.url}" alt="after" class="cmp-after"><input type="range" min="0" max="100" value="50" aria-label="Before and after" oninput="this.parentNode.style.setProperty('--x',this.value+'%')"><span class="cmp-tag cmp-b">Before</span><span class="cmp-tag cmp-a">After</span></div>${c.caption ? `<figcaption>${esc(c.caption)}</figcaption>` : ''}</figure>` : ''; };
+
+function resultsTable(t, rc) {
+  if (!t?.rows?.length) return '';
+  const cols = t.columns ?? [];
+  const head = cols.length || t.caption ? `<thead><tr>${(cols.length ? cols : t.rows[0].map(() => '')).map((c, i) => `<th${i ? ' class="num"' : ''}>${i === 0 && t.caption ? esc(t.caption) : esc(c)}</th>`).join('')}</tr></thead>` : '';
+  return `<div class="results"><table class="table">${head}<tbody>${t.rows.map((row, ri) => `<tr${ri === t.rows.length - 1 && t.highlightLast !== false ? ' class="last"' : ''}>${row.map((c, i) => `<td${i ? ' class="num"' : ''}>${prLinks(esc(c), rc)}</td>`).join('')}</tr>`).join('')}</tbody></table>${t.note ? `<p class="t-small t-muted">${prLinks(esc(t.note), rc)}</p>` : ''}</div>`;
+}
+
+function section(w, n, rc) {
+  const tag = [n, w.tag, w.name].filter(Boolean).join(' · ');
+  const callout = (label, body) => (body ? `<aside class="callout-box"><div class="eyebrow">${esc(label)}</div>${prose(body, rc)}</aside>` : '');
+  const visuals = [w.diagram?.nodes?.length ? ui.card({ title: esc(w.diagram.title ?? 'Before / after'), description: w.diagram.caption ? esc(w.diagram.caption) : '', body: diagramToggle(w.diagram, () => '#') }) : '',
+    w.mermaid ? ui.card({ body: `<pre class="mermaid">${esc(w.mermaid)}</pre>` }) : '', w.compare ? compare(w.compare) : '', ...(w.images ?? []).map(figure)].filter(Boolean).join('');
+  const prLink = (p) => `<a class="pr" href="${rc.repo ? `https://github.com/${esc(rc.repo)}/pull/${p}` : `#pr-${p}`}">#${p}</a>`;
+  return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
+<div class="eyebrow ws-tag">${esc(tag)}</div><h2 class="serif ws-title">${esc(w.title ?? w.name)}</h2>
+${w.asked ? `<p class="asked"><span class="eyebrow">The ask</span> ${esc(w.asked)}</p>` : ''}
+${w.before ? `<div class="prose">${prose(w.before, rc)}</div>` : ''}
+${callout('The design call', w.designCall)}
+${resultsTable(w.results, rc)}
+${visuals}
+${w.proof ? `<div class="prose">${prose(w.proof, rc)}</div>` : ''}
+${[w.aha ?? []].flat().map((a) => callout(a.title ?? 'The aha', a.body)).join('')}
+${(w.sections ?? []).map((x) => `<h3 class="ws-h3">${esc(x.title)} ${(x.prs ?? []).map(prLink).join(' ')}</h3><div class="prose">${prose(x.body, rc)}</div>${resultsTable(x.results, rc)}`).join('')}
+${w.trade ? `<h3 class="ws-h3">The trade we accepted</h3><div class="prose">${prose(w.trade, rc)}</div>` : ''}
+${w.whyItMatters ? `<aside class="why"><b>Why it matters.</b> ${prLinks(md(w.whyItMatters).replace(/^<p>|<\/p>$/g, ''), rc)}</aside>` : ''}
+<details class="disclosure ws-prs"><summary><span>${w.items.length} PR${w.items.length === 1 ? '' : 's'} in this workstream</span><span class="grow"></span><span class="f-count">${counts(w.additions, w.deletions)}</span></summary><ul class="flist" style="padding:4px 14px 10px">${w.items.map((p) => `<li><a href="${esc(p.url ?? '#')}"><span class="t-mono t-muted">#${p.number}</span> <span class="f-name">${esc(p.oneLiner || p.title)}</span></a><span class="f-count">${counts(p.additions, p.deletions)}</span></li>`).join('')}</ul></details>
+</section>`;
 }
 
 export function renderRecapHTML(r, o = {}) {
   const rc = r.rc;
   const s = r.stats;
-  const range = rc.since ? `${fmtDay(rc.since)} – ${fmtDay(rc.until ?? day(r.prs.at(-1)?.mergedAt ?? rc.since))}` : '';
-  const themeCards = r.themes.map((t) => `<section class="card theme" id="theme-${t.i + 1}" style="--theme:${t.color}">
-<header><h2><span class="dot"></span>${esc(t.title)}</h2><p>${t.items.length} PR${t.items.length === 1 ? '' : 's'} · ${counts(t.additions, t.deletions)}</p></header>
-<section class="stack">${md(t.body)}${t.outcome ? `<p class="outcome">${esc(t.outcome)}</p>` : ''}${t.diagram?.nodes?.length ? `<div class="theme-vis">${diagramSVG(t.diagram)}</div>` : ''}${t.mermaid ? `<pre class="mermaid">${esc(t.mermaid)}</pre>` : ''}${(t.images ?? []).map(media).join('')}
-<ul class="flist">${t.items.map((p) => `<li><a href="${esc(p.url ?? `#pr-${p.number}`)}"><span class="t-muted">#${p.number}</span> <span class="f-name">${esc(p.oneLiner || p.title)}</span></a><span class="f-count">${counts(p.additions, p.deletions)}</span></li>`).join('')}</ul></section></section>`).join('');
-  const table = `<div class="table-container"><table class="table"><thead><tr><th>Merged</th><th>PR</th><th>What it did</th><th>Theme</th><th style="text-align:right">Lines</th></tr></thead><tbody>${r.prs.map((p) => {
-    const t = r.themes[r.themeOf.get(p.number)];
-    return `<tr id="pr-${p.number}"><td class="t-muted t-small" style="white-space:nowrap">${fmtDay(day(p.mergedAt))}</td><td><a href="${esc(p.url ?? '#')}" class="t-mono">#${p.number}</a></td><td><div class="f-name">${esc(p.oneLiner || p.title)}</div>${p.oneLiner ? `<div class="t-small t-muted">${esc(p.title)}</div>` : ''}</td><td>${t ? `<span class="badge" data-variant="outline"><span class="dot" style="--theme:${t.color}"></span>${esc(t.title)}</span>` : ''}</td><td class="t-mono" style="text-align:right;white-space:nowrap">${counts(p.additions, p.deletions)}</td></tr>`;
-  }).join('')}</tbody></table></div>`;
-  const anyMermaid = r.themes.some((t) => t.mermaid);
+  const range = rc.since ? `${fmtDay(rc.since)}–${fmtDay(rc.until ?? day(r.prs.at(-1)?.mergedAt ?? rc.since), { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
+  const eyebrow = [rc.repo, rc.author, range, rc.eyebrow].filter(Boolean).map(esc).join(' · ');
+  const metrics = (rc.metrics ?? []).map((m) => `<div class="metric"><div class="serif metric-v">${m.before != null ? `${esc(m.before)} → ${esc(m.after)}${m.unit ? ` ${esc(m.unit)}` : ''}` : esc(m.value)}</div><div class="metric-l">${esc(m.label)}</div></div>`).join('');
+  const table = `<table class="table wstable"><thead><tr><th>Workstream</th><th>Who feels it</th><th class="num">PRs</th><th>Headline result</th></tr></thead><tbody>${r.ws.map((w) => `<tr><td><a href="#ws-${w.i + 1}"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a></td><td class="t-muted">${esc(w.whoFeelsIt ?? '')}</td><td class="num">${w.items.length}</td><td>${esc(w.headline ?? '')}</td></tr>`).join('')}${r.rest.length ? `<tr><td class="t-muted">Everything else</td><td class="t-muted">${esc(rc.otherPrs ?? '')}</td><td class="num">${r.rest.length}</td><td></td></tr>` : ''}</tbody></table>`;
+  const legend = `<div class="legend">${r.ws.map((w) => `<a href="#ws-${w.i + 1}" class="t-small"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a>`).join('')}</div>`;
+  const lanes = swimlanes(r);
+  const all = `<details class="disclosure"><summary><span>All ${s.prs} PRs</span></summary><div class="table-container"><table class="table"><thead><tr><th>Merged</th><th>PR</th><th>What it did</th><th>Workstream</th><th>Lane</th><th class="num">Lines</th></tr></thead><tbody>${r.prs.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<tr id="pr-${p.number}"><td class="t-muted t-small" style="white-space:nowrap">${fmtDay(day(p.mergedAt))}</td><td><a href="${esc(p.url ?? '#')}" class="t-mono">#${p.number}</a></td><td>${esc(p.oneLiner || p.title)}</td><td class="t-small">${w ? `<span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}` : ''}</td><td class="t-small t-muted">${esc((rc.lanes ?? {})[p.lane] ?? p.lane ?? '')}</td><td class="num t-mono" style="white-space:nowrap">${counts(p.additions, p.deletions)}</td></tr>`; }).join('')}</tbody></table></div></details>`;
+  const anyMermaid = r.ws.some((w) => w.mermaid);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rc.title || 'What shipped')}</title>${o.print ? '<meta name="prtour-print" content="1">' : ''}
-${FONTS}<style>${CSS}${RECAP_CSS}</style>${THEME}</head><body><main class="page">
-<header class="hero stack"><div class="row t-small t-muted">${rc.author ? `<img class="avatar" src="https://github.com/${esc(rc.author)}.png?size=64" alt="" onerror="this.remove()">${esc(rc.author)}<span class="sep">·</span>` : ''}${esc(rc.repo ?? '')}${range ? `<span class="sep">·</span>${range}` : ''}</div><h1 class="t-display">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${md(rc.summary)}</div>` : ''}</header>
-<div class="row stats">${ui.stat(s.prs, 'PRs merged')}${ui.stat(r.themes.length, r.themes.length === 1 ? 'theme' : 'themes')}${ui.stat(s.days, 'days with merges')}${ui.stat(`<span class="t-add">+${s.additions.toLocaleString()}</span> <span class="t-del">−${s.deletions.toLocaleString()}</span>`, 'lines')}${(rc.highlights ?? []).map((h) => ui.stat(esc(h.value), esc(h.label))).join('')}</div>
-<section class="split viz">${ui.card({ title: 'When it shipped', description: 'Each dot is a PR, sized by lines changed, colored by theme.', body: `${timelineSVG(r)}<div class="legend">${r.themes.map((t) => `<a href="#theme-${t.i + 1}" class="t-small"><span class="dot" style="--theme:${t.color}"></span>${esc(t.title)}</a>`).join('')}</div>` })}${ui.card({ title: 'Where it landed', description: 'Lines changed by area, without tests or generated files.', body: areaBars(r) })}</section>
-<section class="themes">${themeCards}</section>
-<section class="stack"><h2 class="t-title">Every PR</h2>${table}</section>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
+<style>${CSS}${RECAP_CSS}${TOGGLE_CSS}</style>${THEME}</head><body><main class="page doc">
+<header class="hero"><div class="eyebrow">${eyebrow}</div><h1 class="serif doc-title">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
+${metrics ? `<div class="metrics panel">${metrics}</div>` : ''}
+<div class="panel chartbox"><div class="chart-h"><b>PRs merged per day</b><span class="t-small t-muted">${s.prs} PRs · ${counts(s.additions, s.deletions)}</span></div>${perDayChart(r)}${legend}</div>
+${table}
+${lanes ? `<div class="panel chartbox"><div class="chart-h"><b>Which agent lanes did the work</b><span class="t-small t-muted">one row per lane, each dot a merged PR</span></div>${lanes}</div>` : ''}
+${r.ws.map((w, k) => section(w, k + 1, rc)).join('\n')}
+<section class="appendix">${all}</section>
 <footer class="t-small t-muted no-print" style="margin-top:48px">Made with <a href="https://github.com/2018kguo/prtour">prtour</a></footer>
-</main>${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
+</main>${TOGGLE_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
 }
 
 const RECAP_CSS = `
-.hero{gap:14px;padding:56px 0 28px;max-width:860px}.lede{font-size:17px;line-height:1.65}.avatar{width:22px;height:22px;border-radius:999px}
-.stats{gap:40px;padding:18px 0;margin-bottom:40px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
-.viz{grid-template-columns:minmax(0,7fr) minmax(0,5fr);margin-bottom:56px}
-.tl{width:100%;height:auto;display:block;font:11px var(--font-sans)}.tl-axis{stroke:var(--border)}.tl-day{fill:var(--muted-foreground)}.tl-empty{opacity:.45}
-.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:14px}
-.dot{display:inline-block;width:9px;height:9px;border-radius:999px;background:var(--theme);margin-right:7px;vertical-align:baseline}
-.bars{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:auto 1fr auto;gap:10px 14px;align-items:center}.bars li{display:contents}
-.bar{height:10px;border-radius:5px;background:var(--muted);overflow:hidden}.bar>i{display:block;height:100%;background:var(--foreground);opacity:.75;border-radius:5px}.bar-n{text-align:right;font-variant-numeric:tabular-nums}
-.themes{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:20px;margin-bottom:64px}
-.theme{border-top:3px solid var(--theme)}.theme h2{display:flex;align-items:center}.outcome{font-weight:500;margin:0}
-.theme-vis{border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px}
-.table td{vertical-align:top}
-@media (max-width:960px){.viz{grid-template-columns:minmax(0,1fr)}.themes{grid-template-columns:minmax(0,1fr)}}
-@media print{.themes{grid-template-columns:minmax(0,1fr)}.viz{grid-template-columns:minmax(0,1fr)}.theme{break-inside:avoid}}
+.doc{max-width:860px}.serif{font-family:"Source Serif 4",Georgia,serif;letter-spacing:-.01em}
+.eyebrow{font:500 11.5px/1.4 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-foreground)}
+.hero{padding:56px 0 24px;display:flex;flex-direction:column;gap:14px}.doc-title{font-size:38px;line-height:1.12;font-weight:700;margin:0;text-wrap:balance}
+.lede{font-size:18px;line-height:1.6;color:var(--muted-foreground)}.lede p{margin:0}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px 32px;padding:28px;margin:12px 0 24px;background:var(--muted)}
+.metric-v{font-size:28px;line-height:1.1;font-weight:700;white-space:nowrap}.metric-l{font-size:13.5px;line-height:1.45;color:var(--muted-foreground);margin-top:6px}
+.chartbox{padding:22px 24px;margin:0 0 24px}.chart-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.perday{display:flex;gap:24px;align-items:flex-end}.perday .chart{flex:1;min-width:0}
+.chart{width:100%;height:auto;display:block;font:11.5px var(--font-sans)}.ch-axis{stroke:var(--border)}.ch-v{fill:var(--foreground);font-weight:600;font-size:12px}.ch-l{fill:var(--muted-foreground)}.ch-d{font-size:10.5px}
+.daynotes{margin:0 0 30px;font-size:12.5px;display:grid;grid-template-columns:auto 1fr;gap:6px 10px;max-width:260px}.daynotes dt{font-weight:600}.daynotes dd{margin:0;color:var(--muted-foreground)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:999px;background:var(--ws);margin-right:8px;vertical-align:baseline}
+.sl-l{fill:var(--foreground);font-size:12px}.sl-n{fill:var(--muted-foreground);font-size:11px}.sl-track{stroke:var(--border)}
+.wstable{margin:8px 0 32px}.wstable td{vertical-align:top}.table .num{text-align:right;font-variant-numeric:tabular-nums}
+.ws{padding-top:72px;display:flex;flex-direction:column;gap:18px}
+.ws-tag{color:var(--ws)}.ws-title{font-size:30px;line-height:1.18;font-weight:700;margin:-8px 0 0;text-wrap:balance}
+.asked{margin:0;font-size:15px;color:var(--muted-foreground);border-left:2px solid var(--ws);padding-left:12px}.asked .eyebrow{margin-right:6px}
+.prose{font-size:15.5px;line-height:1.7}.prose p{margin:0 0 12px}.prose p:last-child{margin:0}
+a.pr{font-family:var(--font-mono);font-size:.88em;color:var(--ws,var(--primary));text-decoration:underline;text-underline-offset:2px}
+.callout-box{border:1.5px dashed var(--border);border-radius:var(--radius-lg);padding:18px 22px;font-size:14.5px;line-height:1.65}.callout-box .eyebrow{color:var(--ws);margin-bottom:8px}.callout-box p{margin:0}
+.results .table td,.results .table th{padding-top:10px;padding-bottom:10px}.results tr.last td{font-weight:600}
+.ws-h3{font-size:18px;font-weight:600;margin:10px 0 -6px}
+.why{background:color-mix(in oklab,var(--ws) 12%,var(--background));border-radius:var(--radius-lg);padding:18px 22px;font-size:15px;line-height:1.65}.why b{color:var(--ws)}
+.ws-prs{margin-top:4px}
+.cmp{position:relative;display:grid}.cmp>img{grid-area:1/1;width:100%;display:block}.cmp-after{clip-path:inset(0 0 0 var(--x))}
+.cmp input{grid-area:1/1;align-self:stretch;width:100%;margin:0;opacity:0;cursor:ew-resize}.cmp::after{content:"";position:absolute;top:0;bottom:0;left:var(--x);width:2px;background:var(--primary);pointer-events:none}
+.cmp-tag{position:absolute;top:10px;font:500 11px var(--font-mono);background:var(--background);padding:2px 6px;border-radius:4px;pointer-events:none}.cmp-b{left:10px}.cmp-a{right:10px}
+.appendix{padding-top:64px}
+@media (max-width:760px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.perday{flex-direction:column;align-items:stretch}.doc-title{font-size:30px}}
+@media print{.doc{max-width:none}.ws{break-before:page;padding-top:0}.metrics,.chartbox{break-inside:avoid}.dg-toggle,.cmp input,.cmp-tag{display:none}.cmp-after{clip-path:none}.cmp>img:first-child{display:none}details.disclosure:not(.ws-prs){display:none}}
 `;
 
 export function renderRecapMarkdown(r) {
   const rc = r.rc;
   const s = r.stats;
-  const out = [`## ${rc.title || 'What shipped'}`, '', `${s.prs} PRs over ${s.days} day${s.days === 1 ? "" : "s"} · +${s.additions} −${s.deletions}`, ''];
+  const out = [`## ${rc.title || 'What shipped'}`, '', `${s.prs} PRs over ${s.days} day${s.days === 1 ? '' : 's'} · +${s.additions} −${s.deletions}`, ''];
   if (rc.summary) out.push([rc.summary].flat().join('\n\n'), '');
-  // GitHub renders a mermaid timeline: one section per theme.
-  out.push('```mermaid', 'timeline', ...r.themes.flatMap((t) => [`  section ${t.title.replace(/[:#]/g, '')}`, ...t.items.map((p) => `    ${fmtDay(day(p.mergedAt))} : #${p.number} ${(p.oneLiner || p.title).replace(/[:#]/g, '')}`)]), '```', '');
-  for (const t of r.themes) {
-    out.push(`### ${t.title}`, '');
-    if (t.body) out.push(t.body, '');
-    if (t.outcome) out.push(`**${t.outcome}**`, '');
-    if (t.diagram?.nodes?.length) out.push(diagramMermaid(t.diagram), '');
-    out.push(...t.items.map((p) => `- [#${p.number}](${p.url}) ${p.oneLiner || p.title} (+${p.additions} −${p.deletions})`), '');
+  if (rc.metrics?.length) out.push(...rc.metrics.map((m) => `- **${m.before != null ? `${m.before} → ${m.after}${m.unit ? ` ${m.unit}` : ''}` : m.value}** ${m.label}`), '');
+  out.push('| Workstream | Who feels it | PRs | Headline result |', '|---|---|--:|---|', ...r.ws.map((w) => `| ${w.name} | ${w.whoFeelsIt ?? ''} | ${w.items.length} | ${w.headline ?? ''} |`), '');
+  for (const w of r.ws) {
+    out.push(`### ${w.title ?? w.name}`, '');
+    if (w.before) out.push(w.before, '');
+    if (w.designCall) out.push(`> **The design call.** ${w.designCall.replace(/\n+/g, ' ')}`, '');
+    if (w.results?.rows?.length) { const cols = w.results.columns ?? w.results.rows[0].map(() => ''); out.push(`| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`, ...w.results.rows.map((x) => `| ${x.join(' | ')} |`), ''); }
+    if (w.diagram?.nodes?.length) out.push(diagramMermaid(w.diagram), '');
+    if (w.whyItMatters) out.push(`**Why it matters.** ${w.whyItMatters}`, '');
+    out.push(`<details><summary>${w.items.length} PRs</summary>`, '', ...w.items.map((p) => `- [#${p.number}](${p.url}) ${p.oneLiner || p.title}`), '', '</details>', '');
   }
   return `${out.join('\n').trim()}\n`;
 }
@@ -188,25 +245,30 @@ export function renderRecapMarkdown(r) {
 export function renderRecapTerminal(r, { color = true, width = 100 } = {}) {
   const c = (code) => (x) => (color ? `\x1b[${code}m${x}\x1b[0m` : String(x));
   const [bold, dim, green, red, yellow] = [c(1), c(2), c(32), c(31), c(33)];
-  const tones = [34, 32, 33, 35, 31, 36].map(c);
+  const tones = [32, 34, 33, 35, 31, 36, 32, 35, 33, 34].map(c);
   const rc = r.rc;
   const s = r.stats;
-  const out = [bold(rc.title || 'What shipped'), dim(`${s.prs} PRs · ${s.days} day${s.days === 1 ? "" : "s"} · `) + green(`+${s.additions}`) + ' ' + red(`-${s.deletions}`)];
-  if (rc.summary) out.push('', [rc.summary].flat().join('\n\n'));
+  const wrap = (t) => String(t ?? '').replace(/\s+/g, ' ').match(new RegExp(`.{1,${width - 4}}(\\s|$)`, 'g'))?.map((l) => `  ${l.trim()}`) ?? [];
+  const out = [bold(rc.title || 'What shipped'), dim(`${s.prs} PRs · ${s.days} day${s.days === 1 ? '' : 's'} · `) + green(`+${s.additions}`) + ' ' + red(`-${s.deletions}`)];
+  if (rc.summary) out.push('', ...wrap([rc.summary].flat().join(' ')));
+  if (rc.metrics?.length) out.push('', ...rc.metrics.map((m) => `  ${bold(m.before != null ? `${m.before} → ${m.after}${m.unit ? ` ${m.unit}` : ''}` : m.value)}  ${dim(m.label)}`));
   for (const w of r.warnings) out.push(yellow(`! ${w}`));
-  // Per-day strip: one ● per PR, colored by theme.
-  out.push('', bold('When it shipped'));
-  for (const d of dayRange(r)) {
+  out.push('', bold('PRs merged per day'));
+  const days = dayKeys(r);
+  const max = Math.max(1, ...days.map((d) => r.prs.filter((p) => day(p.mergedAt) === d).length));
+  for (const d of days) {
     const ps = r.prs.filter((p) => day(p.mergedAt) === d);
-    out.push(`  ${dim(fmtDay(d, { weekday: 'short', month: 'short', day: 'numeric' }).padEnd(12))} ${ps.map((p) => tones[(r.themeOf.get(p.number) ?? 5) % 6]('●')).join(' ')}`);
+    const bar = r.ws.map((w, i) => tones[i % 10]('█'.repeat(Math.round((ps.filter((p) => r.wsOf.get(p.number) === w.i).length / max) * 40)))).join('');
+    out.push(`  ${dim(fmtDay(d, { weekday: 'short', month: 'short', day: 'numeric' }).padEnd(12))} ${bar} ${ps.length || ''}  ${dim((rc.dayNotes ?? {})[d] ?? '')}`);
   }
-  out.push('  ' + r.themes.map((t, i) => tones[i % 6]('●') + ' ' + t.title).join('   '));
-  for (const [i, t] of r.themes.entries()) {
-    out.push('', tones[i % 6](bold(`━━ ${t.title} `.padEnd(width, '━'))), dim(`${t.items.length} PRs · +${t.additions} -${t.deletions}`));
-    if (t.body) out.push(t.body);
-    if (t.outcome) out.push(bold(t.outcome));
-    if (t.diagram?.nodes?.length) out.push(...diagramTree(t.diagram, { add: green, dim, chg: yellow }).map((l) => `  ${l}`));
-    for (const p of t.items) out.push(`  ${dim(`#${p.number}`)} ${p.oneLiner || p.title} ${dim(`+${p.additions} -${p.deletions}`)}`);
+  out.push('', ...r.ws.map((w, i) => `  ${tones[i % 10]('●')} ${bold(String(w.name).padEnd(28))} ${String(w.items.length).padStart(3)}  ${w.headline ?? ''}`));
+  for (const [i, w] of r.ws.entries()) {
+    out.push('', tones[i % 10](bold(`━━ ${i + 1} · ${w.title ?? w.name} `.padEnd(width, '━'))));
+    if (w.before) out.push(...wrap(w.before));
+    if (w.designCall) out.push('', `  ${yellow('THE DESIGN CALL')}`, ...wrap(w.designCall));
+    if (w.diagram?.nodes?.length) out.push('', ...diagramTree(w.diagram, { add: green, dim, chg: yellow }).map((l) => `  ${l}`));
+    if (w.results?.rows?.length) out.push('', ...w.results.rows.map((x) => `  ${x.map((v, j) => (j ? String(v).padStart(16) : String(v).padEnd(36))).join('')}`));
+    if (w.whyItMatters) out.push('', ...wrap(`Why it matters. ${w.whyItMatters}`).map(bold));
   }
   return `${out.join('\n')}\n`;
 }

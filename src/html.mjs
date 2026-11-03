@@ -4,7 +4,7 @@
 import { preloadPatchDiff } from '@pierre/diffs/ssr';
 import { filePatch } from './patch.mjs';
 import fs from 'node:fs';
-import { diagramSVG } from './diagram.mjs';
+import { TOGGLE_CSS, TOGGLE_JS, diagramToggle } from './diagram.mjs';
 
 import { CSS, FONTS, THEME, counts, esc, n2, ui } from './ui.mjs';
 export { esc };
@@ -79,7 +79,7 @@ function mediaHTML(im) {
 function mapHTML(d) {
   if (!d?.nodes?.length) return '';
   const added = d.nodes.filter((x) => x.change === 'new').length;
-  return ui.card({ title: esc(d.title ?? 'Before / after'), description: d.caption ? esc(d.caption) : '', action: added ? `<span class="badge" data-variant="outline" style="color:var(--add)">+${added} new</span>` : '', body: diagramSVG(d) });
+  return ui.card({ title: esc(d.title ?? 'Before / after'), description: d.caption ? esc(d.caption) : '', action: added ? `<span class="badge" data-variant="outline" style="color:var(--add)">+${added} new</span>` : '', body: diagramToggle(d) });
 }
 
 const visualsHTML = (v) => [mapHTML(v.diagram), v.mermaid ? ui.card({ body: `<pre class="mermaid">${esc(v.mermaid)}</pre>` }) : '', ...(v.images ?? []).map(mediaHTML)].filter(Boolean).join('');
@@ -136,7 +136,7 @@ export async function renderHTML(r, opts = {}) {
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(t.title || 'Guided review')}</title><meta name="prtour-id" content="${esc(id)}">${o.live ? '<meta name="prtour-live" content="1">' : ''}${o.print ? '<meta name="prtour-print" content="1">' : ''}
-${FONTS}<style>${CSS}${PAGE_CSS}</style>${THEME}</head><body>
+${FONTS}<style>${CSS}${PAGE_CSS}${TOGGLE_CSS}</style>${THEME}</head><body>
 ${ui.tabs([['guide', 'Guide', true], ['files', `Files <span class="t-muted">${s.files}</span>`]], `<span class="row t-small t-muted no-print"><span id="progress-text"></span><span class="meter"><i id="progress-bar" style="width:0"></i></span></span>`)}
 <main class="page">
 <div data-panel="guide">
@@ -160,7 +160,7 @@ ${chapters.join('\n')}
 <div id="fb-bar" class="panel floating row no-print" style="bottom:20px;padding:8px 12px;box-shadow:0 6px 20px rgb(0 0 0/.08)" hidden><span id="fb-count" class="t-small"></span>${ui.btn('Copy feedback', 'id="fb-copy"', 'outline')}${ui.btn('Clear', 'id="fb-clear"')}</div>
 <template id="pierre-shared">${o.shared.map((x, i) => `<template data-i="${i}">${x}</template>`).join('')}</template>
 <style id="pierre-tokens" media="not all">${[...o.tokens].map(([css, k]) => `.${k}{${css}}`).join('')}:host([data-collapsed]) pre{display:none}[data-diffs-header]{cursor:pointer}</style>
-<script>${ADOPT}</script><script>${CLIENT}</script>${anyMermaid ? MERMAID : ''}</body></html>`;
+<script>${ADOPT}</script><script>${CLIENT}</script>${TOGGLE_JS}${anyMermaid ? MERMAID : ''}</body></html>`;
 }
 
 // Mermaid needs its library: fetched only when a tour uses it. Offline, the source stays readable.

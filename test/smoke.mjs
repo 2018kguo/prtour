@@ -103,12 +103,13 @@ const pr = (number, mergedAt, area) => ({ number, title: `t${number}`, url: `htt
 fs.writeFileSync(path.join(rd, 'recap.json'), JSON.stringify({ kind: 'recap', title: 'Week', since: '2026-10-27', until: '2026-11-03', summary: 'Two things shipped.',
   prs: [pr(1, '2026-10-28T10:00:00Z', 'apps/web'), pr(2, '2026-10-30T10:00:00Z', 'packages/db'), pr(3, '2026-11-02T10:00:00Z', 'apps/web')],
   themes: [{ title: 'Faster reads', body: 'Reads got cheaper.', prs: [1, 3], diagram: { nodes: [{ id: 'a', label: 'read' }, { id: 'b', label: 'cache', change: 'new' }], edges: [{ from: 'a', to: 'b' }] } }, { title: 'Schema', body: 'One index.', prs: [2] }] }));
-assert.match(run('check', rd), /3 PRs, 2 themes, 3 days with merges/);
+assert.match(run('check', rd), /3 PRs, 2 workstreams, 3 days with merges/);
 const rhtml = fs.readFileSync(run('render', rd).trim(), 'utf8');
-assert.match(rhtml, /<svg class="tl"/);
-assert.equal((rhtml.match(/<circle /g) ?? []).length, 3);
-assert.match(rhtml, /id="theme-2"/);
+assert.match(rhtml, /<svg class="chart"/);
+assert.match(rhtml, /PRs merged per day/);
+assert.match(rhtml, /id="ws-2"/);
+assert.match(rhtml, /class="dg-wrap" data-view="after"/);
 assert.doesNotMatch(rhtml, /diffs-container/);
-assert.match(run('render', rd, '--format', 'md'), /```mermaid\ntimeline\n  section Faster reads/);
-assert.match(run('show', rd, '--no-color'), /━━ Faster reads/);
+assert.match(run('render', rd, '--format', 'md'), /\| Faster reads \|  \| 2 \|/);
+assert.match(run('show', rd, '--no-color'), /━━ 1 · Faster reads/);
 console.log('smoke ok');

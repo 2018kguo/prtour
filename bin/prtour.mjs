@@ -10,6 +10,7 @@ import { renderHTML } from '../src/html.mjs';
 import { renderMarkdown, renderTerminal } from '../src/text.mjs';
 import { detect } from '../src/term-images.mjs';
 import { htmlToPdf } from '../src/pdf.mjs';
+import { findLanes } from '../src/lanes.mjs';
 import { renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
@@ -232,25 +233,42 @@ async function renderRecap(dir, flags) {
   console.log(out);
 }
 
-// Merged PRs by one author in a date window, scaffolded into recap.json.
-function recap(flags) {
-  const author = flags.author ?? trySh('gh', ['api', 'user', '--jq', '.login'])?.trim();
-  if (!author) die('pass --author <github login> (gh could not tell who you are)');
+// Merged PRs by one or more authors in a date window, scaffolded into
+// recap.json, plus context/<n>.md per PR (description, files, and what the
+// person asked the agent lane that opened it) for whoever writes the recap.
+async function recap(flags) {
+  const authors = String(flags.author ?? trySh('gh', ['api', 'user', '--jq', '.login'])?.trim() ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!authors.length) die('pass --author <login>[,<login>…] (gh could not tell who you are)');
   const since = flags.since ?? new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
   const until = flags.until ?? new Date().toISOString().slice(0, 10);
   const repo = flags.repo ? ['-R', flags.repo] : [];
-  const json = trySh('gh', ['pr', 'list', ...repo, '--state', 'merged', '--author', author, '--search', `merged:${since}..${until}`, '--limit', '300', '--json', 'number,title,url,mergedAt,additions,deletions,changedFiles,files,body']);
-  if (!json) die('gh could not list PRs (is `gh auth status` ok, and are you in a repo or passing --repo?)');
-  const prs = JSON.parse(json);
-  if (!prs.length) die(`no merged PRs by ${author} between ${since} and ${until}`);
+  const byNum = new Map();
+  for (const author of authors) {
+    const json = trySh('gh', ['pr', 'list', ...repo, '--state', 'merged', '--author', author, '--search', `merged:${since}..${until}`, '--limit', '1000', '--json', 'number,title,url,createdAt,mergedAt,additions,deletions,changedFiles,files,body,author']);
+    if (!json) die(`gh could not list PRs for ${author} (is \`gh auth status\` ok, and are you in a repo or passing --repo?)`);
+    for (const x of JSON.parse(json)) byNum.set(x.number, x);
+  }
+  const prs = [...byNum.values()].sort((x, y) => x.mergedAt.localeCompare(y.mergedAt));
+  if (!prs.length) die(`no merged PRs by ${authors.join(', ')} between ${since} and ${until}`);
   const name = flags.repo ?? (prs[0].url.match(/github\.com\/([^/]+\/[^/]+)\//) ?? [])[1];
-  const dir = makeDir(`recap-${author}-${since}`, flags);
+  const dir = makeDir(`recap-${authors.join('+')}-${since}`, flags);
   const p = path.join(dir, 'recap.json');
   if (fs.existsSync(p) && !flags.force) die(`${rel(p)} exists (--force to re-scaffold)`);
-  fs.writeFileSync(p, `${JSON.stringify(scaffoldRecap(prs, { title: `What shipped, ${since} to ${until}`, author, repo: name, since, until }), null, 2)}\n`);
-  console.log(`${rel(dir)}: ${prs.length} merged PRs by ${author}, ${since}..${until}`);
-  for (const x of prs) console.log(`  #${x.number} ${x.mergedAt.slice(0, 10)} +${x.additions} -${x.deletions} ${x.title}`);
-  console.log(`\nnext: write themes and oneLiners in ${rel(p)}, then \`prtour check\` and \`prtour render\``);
+  const lanes = flags['no-lanes'] ? new Map() : await findLanes({ repo: name, prs, since, until });
+  fs.mkdirSync(path.join(dir, 'context'), { recursive: true });
+  for (const x of prs) {
+    const l = lanes.get(x.number);
+    const files = (x.files ?? []).slice().sort((a, b) => b.additions + b.deletions - a.additions - a.deletions).slice(0, 25).map((f) => `- ${f.path} +${f.additions} -${f.deletions}`);
+    fs.writeFileSync(path.join(dir, 'context', `${x.number}.md`), [`# #${x.number} ${x.title}`, `${x.url} · by ${x.author?.login} · merged ${x.mergedAt} · +${x.additions} -${x.deletions} in ${x.changedFiles} files`, '',
+      ...(l ? [`## What the person asked the lane that opened it (${l.lane ?? l.agent})`, '', ...l.asked.map((q) => `> ${q}`), ''] : []),
+      '## Description', '', x.body || '(none)', '', '## Largest files', '', ...files, ''].join('\n'));
+  }
+  const rc = scaffoldRecap(prs, { title: `What shipped, ${since} to ${until}`, author: authors.join(', '), repo: name, since, until });
+  for (const x of rc.prs) { const l = lanes.get(x.number); if (l) x.lane = l.lane ?? `${l.agent} ${l.session.slice(0, 8)}`; delete x.description; }
+  fs.writeFileSync(p, `${JSON.stringify(rc, null, 2)}\n`);
+  console.log(`${rel(dir)}: ${prs.length} merged PRs by ${authors.join(', ')}, ${since}..${until}; ${lanes.size} matched to agent lanes`);
+  console.log(`context per PR: ${rel(path.join(dir, 'context'))}/<number>.md`);
+  console.log(`\nnext: write workstreams in ${rel(p)} (see \`prtour skill\`), then \`prtour check\` and \`prtour render\``);
   return dir;
 }
 
@@ -268,7 +286,7 @@ async function show(dir, flags) {
 function check(dir) {
   if (isRecap(dir)) {
     const r = loadRecap(dir);
-    console.log(`${r.stats.prs} PRs, ${r.themes.length} themes, ${r.stats.days} day${r.stats.days === 1 ? "" : "s"} with merges`);
+    console.log(`${r.stats.prs} PRs, ${r.ws.length} workstreams, ${r.stats.days} day${r.stats.days === 1 ? "" : "s"} with merges`);
     for (const w of r.warnings) console.log(`warning: ${w}`);
     process.exit(r.warnings.length ? 1 : 0);
   }

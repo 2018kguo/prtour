@@ -132,23 +132,53 @@ and reports each hit with a fix.
 
 ## Recaps: what shipped across many PRs
 
-For "what did X ship this week", "summarize my PRs since Monday", or a team
-update, use a recap instead of a tour. It is about outcomes, not diffs.
+For "what did X ship this week", a team update, or a write-up of a stretch of
+work, use a recap. A recap is a workstream report for humans. It is about
+impact, the reasoning behind it, and the aha moments, not diffs. The reader
+should come away knowing what was wrong before, what changed, and the
+non-obvious idea that made the change work.
 
-1. `npx -y github:2018kguo/prtour recap --author <login> --since YYYY-MM-DD [--until …] [--repo o/r]`
-   writes `.prtour/recap-<login>-<since>/recap.json` with every merged PR (title,
-   date, size, area, and the PR description for you to read).
-2. Group the PRs into 2 to 6 `themes` by outcome, not by directory. For each
-   theme, write a `title` naming the outcome, a `body` of one or two sentences,
-   and an optional `outcome` line: what is now true, or what is still pending.
-   A theme can carry a `diagram`, `mermaid` or `images` like a chapter.
-3. Give every PR a `oneLiner`: what it did, in plain words, under 140 chars.
-4. Write a two- or three-sentence `summary`. Add optional `highlights` (numbers
-   worth showing, e.g. `{"value": "40%", "label": "faster cold start"}`), but
-   only numbers you can point to.
-5. Run `npx -y github:2018kguo/prtour check`. The same writing lint applies. Then
-   `npx -y github:2018kguo/prtour render` (HTML), `--format md` (Slack or GitHub),
-   `--format pdf`, or `npx -y github:2018kguo/prtour show`.
+1. `npx -y github:2018kguo/prtour recap --author <login>[,<login>…] --since YYYY-MM-DD [--until …] [--repo o/r]`
+   writes `recap.json` with every merged PR, plus `context/<number>.md` per PR:
+   the description, the largest files, and what the person typed to the agent
+   lane that opened it. Lanes come from local Claude Code and Codex
+   transcripts, named by ptyd when it runs. With hundreds of PRs, distill the
+   context files in parallel batches first, then write.
+2. Group PRs into 4 to 10 `workstreams` by outcome. Order by impact. Small or
+   internal PRs that fit nowhere go in `otherPrs` (one line on what they are),
+   not into a workstream of their own.
+3. Write each workstream as a short feature article:
+   - `name` (2 to 4 words, for tables and legends), `tag` (e.g. "Highest
+     impact", "Reliability", "New capability"), `whoFeelsIt` ("Every long
+     chat"), `headline` (the result in one line, with the number).
+   - `title`: the outcome as a sentence a non-author understands ("A long
+     chat stopped rebuilding itself on every step").
+   - `asked`: what the person set out to do, in one sentence, from their own
+     words in the lane context. Paraphrase; never paste raw prompts.
+   - `before`: what was wrong, with real numbers and a real example.
+   - `designCall`: the one decision or invariant that made the fix work.
+   - `results`: a before/after table, `{"caption", "columns", "rows", "note"}`.
+     Put PR numbers in the row labels ("After #10948").
+   - `proof`: how it was shown to be right (replays, benches, oracles).
+   - `aha`: `[{"title": "The subtle one: a lost keystroke", "body": …}]`, for
+     the non-obvious discovery a smart reader would want to learn.
+   - `sections`: `[{"title", "prs", "body", "results"}]`, smaller results
+     inside the workstream.
+   - `trade`: what was given up. `whyItMatters`: one or two sentences on what
+     a customer or engineer now gets.
+   - Visuals that make the aha obvious: `diagram` (before/after map; readers
+     can toggle Before/After), `mermaid`, `images`, or `compare`
+     (`{"before": {"src"}, "after": {"src"}, "caption"}`, a drag slider).
+   Write `#12345` anywhere in prose and it links to the PR.
+4. Top of the report: `title`, `summary` (two or three sentences: scope, what
+   the reader gets), `metrics` (3 to 6 cards, `{"before": "504", "after":
+   "321", "unit": "MB", "label": "idle chat-worker heap, from a zod upgrade"}`
+   or `{"value", "label"}`), and `dayNotes` (`{"2026-10-28": "chat memory, OCR
+   second reader"}`). Name agent lanes in `lanes` (`{"claude 3873de98": "Chat
+   memory lane"}`). Give every PR a `oneLiner`.
+5. Every number must come from a PR description or context file. Never
+   estimate. The writing rules above apply, and `npx -y github:2018kguo/prtour check`
+   enforces them. Then `render` (HTML), `--format pdf`, `--format md`, or `show`.
 
 ## tour.json
 
