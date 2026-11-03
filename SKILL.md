@@ -154,31 +154,31 @@ non-obvious idea that made the change work.
 2. Group PRs into 4 to 10 `workstreams` by outcome. Order by impact. Small or
    internal PRs that fit nowhere go in `otherPrs` (one line on what they are),
    not into a workstream of their own.
-3. Write each workstream as a short feature article:
-   - `name` (2 to 4 words, for tables and legends), `tag` (e.g. "Highest
-     impact", "Reliability", "New capability"), `whoFeelsIt` ("Every long
-     chat"), `headline` (the result in one line, with the number).
-   - `title`: the outcome as a sentence a non-author understands ("A long
-     chat stopped rebuilding itself on every step").
-   - `asked`: what the person set out to do, in one sentence, from their own
-     words in the lane context. Paraphrase; never paste raw prompts.
-   - `before`: what was wrong, with real numbers and a real example.
-   - `designCall`: the one decision or invariant that made the fix work.
-   - `results`: a before/after table, `{"caption", "columns", "rows", "note"}`.
-     Put PR numbers in the row labels ("After #10948").
-   - `proof`: how it was shown to be right (replays, benches, oracles).
-   - `aha`: `[{"title": "The subtle one: a lost keystroke", "body": …}]`, for
-     the non-obvious discovery a smart reader would want to learn.
-   - `sections`: `[{"title", "prs", "body", "results"}]`, smaller results
-     inside the workstream.
-   - `trade`: what was given up. `whyItMatters`: one or two sentences on what
-     a customer or engineer now gets.
-   - Visuals that make the aha obvious: `diagram` (before/after map; readers
-     can toggle Before/After), `mermaid`, `images`, or `compare`
-     (`{"before": {"src"}, "after": {"src"}, "caption"}`, a drag slider).
+3. Lead with the pain. Readers care what broke for people, then what fixed it.
+   For each workstream:
+   - `symptom`: what a user or engineer actually lived through, in their words
+     ("Your chat froze mid-answer for seconds at a time, at random"). No
+     internals. `howBad`: how often or how badly, in human terms, with a sourced
+     number ("1 in 7 busy minutes had a freeze over a second"). `now`: what they
+     get today, in one sentence.
+   - `title`: the fix as an outcome, symptom-forward ("Chats stop freezing while
+     someone else's PDF parses"). `name` (2 to 4 words), `tag`, `whoFeelsIt`,
+     `headline` (the result in one line, for the overview table).
+   - `wins`: 3 to 5 one-line results that lead with the number,
+     `[{"text": "4,000-page OCR document: 65.5 s to 29 ms of blocking", "prs": [11270]}]`.
+   - `designCall`: the one aha, at most 3 sentences, so a smart reader learns
+     something. Extra ones go in `aha`.
+   - One visual that makes the aha obvious: `diagram` (readers toggle
+     Before/After), `mermaid`, `images`, or `compare`.
+   - `asked`: what the person set out to do, paraphrased from the lane context.
+   - Everything dense is folded under "Engineering details": `before` (the
+     technical cause), `results` tables, `proof`, `sections`, `trade`. Keep it
+     there; don't repeat it above.
    Write `#12345` anywhere in prose and it links to the PR.
-4. Top of the report: `title`, `summary` (two or three sentences: scope, what
-   the reader gets), `metrics` (3 to 6 cards, `{"before": "504", "after":
+4. Top of the report: `title`, `summary` (two or three sentences, opening with
+   what people were living with), `problems` (4 to 6 cards for "What was
+   broken": `{"icon", "symptom", "howBad", "now", "workstream": "<name>"}`, the
+   scariest user-facing ones first), `metrics` (optional "By the numbers" strip, `{"before": "504", "after":
    "321", "unit": "MB", "label": "idle chat-worker heap, from a zod upgrade"}`
    or `{"value", "label"}`), and `dayNotes` (`{"2026-10-28": "chat memory, OCR
    second reader"}`). Name agent lanes in `lanes` (`{"claude 3873de98": "Chat

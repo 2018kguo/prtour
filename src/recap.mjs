@@ -34,7 +34,7 @@ export function scaffoldRecap(prs, meta) {
   };
 }
 
-const TEXT_FIELDS = [['title', 90], ['name', 40], ['headline', 140], ['whoFeelsIt', 40], ['asked', 260], ['before', 900], ['designCall', 900], ['proof', 900], ['trade', 500], ['whyItMatters', 400]];
+const TEXT_FIELDS = [['title', 90], ['name', 40], ['headline', 140], ['whoFeelsIt', 40], ['asked', 260], ['symptom', 200], ['howBad', 220], ['now', 200], ['before', 900], ['designCall', 420], ['proof', 900], ['trade', 500], ['whyItMatters', 400]];
 
 export function resolveRecap(rc) {
   const warnings = [];
@@ -56,7 +56,10 @@ export function resolveRecap(rc) {
   const texts = [['summary', [rc.summary ?? ''].flat().join('\n\n'), 700], ...(rc.metrics ?? []).map((m) => ['metric label', m.label, 110]),
     ...ws.flatMap((w) => [...TEXT_FIELDS.map(([k, max]) => [`"${w.name}" ${k}`, w[k], max]),
       ...[w.aha ?? []].flat().map((a) => [`"${w.name}" aha`, a.body, 600]), ...(w.sections ?? []).map((x) => [`"${w.name}" section "${x.title}"`, x.body, 900])]),
+    ...ws.flatMap((w) => (w.wins ?? []).map((x) => [`"${w.name}" win`, typeof x === 'string' ? x : x.text, 170])),
+    ...(rc.problems ?? []).flatMap((x, i) => [[`problem ${i + 1} symptom`, x.symptom, 130], [`problem ${i + 1} howBad`, x.howBad, 200], [`problem ${i + 1} now`, x.now, 150]]),
     ...prs.map((p) => [`#${p.number} oneLiner`, p.oneLiner, 160])];
+  for (const w of ws) if (!w.symptom) warnings.push(`"${w.name}": no symptom. Say what a user or engineer actually saw before, in plain words`);
   for (const [where, text, max] of texts) {
     for (const hit of lint(text)) warnings.push(`writing, ${where}: ${hit}`);
     if (stripCode(text).length > max) warnings.push(`writing, ${where}: ${stripCode(text).length} chars (max ${max}); say less`);
@@ -150,19 +153,23 @@ function section(w, n, rc, icons) {
   const visuals = [w.diagram?.nodes?.length ? ui.card({ title: esc(w.diagram.title ?? 'Before / after'), description: w.diagram.caption ? esc(w.diagram.caption) : '', body: diagramToggle(w.diagram, () => '#', icons) }) : '',
     w.mermaid ? ui.card({ body: `<pre class="mermaid">${esc(w.mermaid)}</pre>` }) : '', w.compare ? compare(w.compare) : '', ...(w.images ?? []).map(figure)].filter(Boolean).join('');
   const prLink = (p) => `<a class="pr" href="${rc.repo ? `https://github.com/${esc(rc.repo)}/pull/${p}` : `#pr-${p}`}">#${p}</a>`;
+  const lanes = new Map();
+  for (const p of w.items) if (p.lane) lanes.set(p.lane, (lanes.get(p.lane) ?? 0) + 1);
+  const laneChips = [...lanes].sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, c]) => `<span class="badge" data-variant="outline">${esc((rc.lanes ?? {})[k] ?? k)} · ${c}</span>`).join('');
+  const wins = (w.wins ?? []).map((x) => (typeof x === 'string' ? { text: x } : x));
+  const details = [w.before ? `<div class="prose">${prose(w.before, rc)}</div>` : '', resultsTable(w.results, rc), w.proof ? `<div class="prose">${prose(w.proof, rc)}</div>` : '',
+    ...(w.sections ?? []).map((x) => `<h3 class="ws-h3">${esc(x.title)} ${(x.prs ?? []).map(prLink).join(' ')}</h3><div class="prose">${prose(x.body, rc)}</div>${resultsTable(x.results, rc)}`),
+    w.trade ? `<h3 class="ws-h3">The trade we accepted</h3><div class="prose">${prose(w.trade, rc)}</div>` : ''].filter(Boolean).join('');
   return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
 <div class="ws-head">${w.icon && icons?.has(w.icon) ? `<span class="ic-chip">${iconHTML(icons, w.icon)}</span>` : ''}<div class="eyebrow ws-tag">${esc(tag)}</div></div><h2 class="serif ws-title">${esc(w.title ?? w.name)}</h2>
-${w.asked ? `<p class="asked"><span class="eyebrow">The ask</span> ${esc(w.asked)}</p>` : ''}
-${w.before ? `<div class="prose">${prose(w.before, rc)}</div>` : ''}
-${callout('The design call', w.designCall)}
-${resultsTable(w.results, rc)}
+${w.symptom || w.now || w.whyItMatters ? `<div class="pain"><div class="pain-before"><div class="eyebrow">What people saw</div><p class="pain-s">${prLinks(esc(w.symptom ?? ''), rc)}</p>${w.howBad ? `<p class="pain-d">${prLinks(esc(w.howBad), rc)}</p>` : ''}</div><div class="pain-now"><div class="eyebrow">Now</div><p class="pain-s">${prLinks(esc(w.now ?? w.whyItMatters ?? ''), rc)}</p></div></div>` : ''}
+${wins.length ? `<ul class="wins">${wins.map((x) => `<li>${prLinks(md(x.text).replace(/^<p>|<\/p>$/g, ''), rc)}${(x.prs ?? []).length ? ` <span class="t-small">${x.prs.map(prLink).join(' ')}</span>` : ''}</li>`).join('')}</ul>` : ''}
 ${visuals}
-${w.proof ? `<div class="prose">${prose(w.proof, rc)}</div>` : ''}
+${callout('The aha', w.designCall)}
 ${[w.aha ?? []].flat().map((a) => callout(a.title ?? 'The aha', a.body)).join('')}
-${(w.sections ?? []).map((x) => `<h3 class="ws-h3">${esc(x.title)} ${(x.prs ?? []).map(prLink).join(' ')}</h3><div class="prose">${prose(x.body, rc)}</div>${resultsTable(x.results, rc)}`).join('')}
-${w.trade ? `<h3 class="ws-h3">The trade we accepted</h3><div class="prose">${prose(w.trade, rc)}</div>` : ''}
-${w.whyItMatters ? `<aside class="why"><b>Why it matters.</b> ${prLinks(md(w.whyItMatters).replace(/^<p>|<\/p>$/g, ''), rc)}</aside>` : ''}
-<details class="disclosure ws-prs"><summary><span>${w.items.length} PR${w.items.length === 1 ? '' : 's'} in this workstream</span><span class="grow"></span><span class="f-count">${counts(w.additions, w.deletions)}</span></summary><ul class="flist" style="padding:4px 14px 10px">${w.items.map((p) => `<li><a href="${esc(p.url ?? '#')}"><span class="t-mono t-muted">#${p.number}</span> <span class="f-name">${esc(p.oneLiner || p.title)}</span></a><span class="f-count">${counts(p.additions, p.deletions)}</span></li>`).join('')}</ul></details>
+${w.asked || laneChips ? `<div class="ws-meta">${w.asked ? `<p class="asked"><span class="eyebrow">The ask</span> ${esc(w.asked)}</p>` : ''}${laneChips ? `<div class="row lanes"><span class="eyebrow">Agent lanes</span>${laneChips}</div>` : ''}</div>` : ''}
+${details ? `<details class="disclosure ws-details"><summary><span>Engineering details</span><span class="grow"></span><span class="t-small t-muted">tables, measurements, trade-offs</span></summary><div class="stack" style="padding:6px 18px 18px">${details}</div></details>` : ''}
+<details class="disclosure ws-prs"><summary><span>${w.items.length} PR${w.items.length === 1 ? '' : 's'}</span><span class="grow"></span><span class="f-count">${counts(w.additions, w.deletions)}</span></summary><ul class="flist" style="padding:4px 14px 10px">${w.items.map((p) => `<li><a href="${esc(p.url ?? '#')}"><span class="t-mono t-muted">#${p.number}</span> <span class="f-name">${esc(p.oneLiner || p.title)}</span></a><span class="f-count">${counts(p.additions, p.deletions)}</span></li>`).join('')}</ul></details>
 </section>`;
 }
 
@@ -181,11 +188,12 @@ export function renderRecapHTML(r, o = {}) {
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
 <style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><main class="page doc">
 <header class="hero"><div class="eyebrow">${eyebrow}</div><h1 class="serif doc-title">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
-${metrics ? `<div class="metrics panel">${metrics}</div>` : ''}
+${(rc.problems ?? []).length ? `<section class="problems"><h2 class="serif sec-h">${esc(rc.problemsTitle ?? 'What was broken')}</h2><div class="pgrid">${rc.problems.map((x) => { const w = r.ws.find((y) => y.name === x.workstream) ?? r.ws[Number(x.workstream) - 1]; return `<a class="pcard" href="${w ? `#ws-${w.i + 1}` : '#'}" style="--ws:${w?.color ?? 'var(--primary)'}">${x.icon ? `<span class="ic-chip">${iconHTML(r.icons, x.icon)}</span>` : ''}<p class="serif pcard-s">${esc(x.symptom)}</p>${x.howBad ? `<p class="pcard-d">${esc(x.howBad)}</p>` : ''}${x.now ? `<p class="pcard-now"><span class="eyebrow">Now</span> ${esc(x.now)}</p>` : ''}</a>`; }).join('')}</div></section>` : ''}
+${metrics ? `<h2 class="serif sec-h">By the numbers</h2><div class="metrics panel">${metrics}</div>` : ''}
 <div class="panel chartbox"><div class="chart-h"><b>PRs merged per day</b><span class="t-small t-muted">${s.prs} PRs · <span class="t-add">+${s.additions.toLocaleString()}</span> <span class="t-del">−${s.deletions.toLocaleString()}</span></span></div>${perDayChart(r)}${legend}</div>
 ${table}
 ${lanes ? `<div class="panel chartbox"><div class="chart-h"><b>Which agent lanes did the work</b><span class="t-small t-muted">one row per lane, each dot a merged PR</span></div>${lanes}</div>` : ''}
-${r.ws.map((w, k) => section(w, k + 1, rc, r.icons)).join('\n')}
+${r.ws.map((w, k) => section(w, k + 1, rc, r.icons)).join('\n').replace(/<details class="disclosure ws-details">/g, o.print ? '<details class="disclosure ws-details" open>' : '$&')}
 <section class="appendix">${all}</section>
 <footer class="t-small t-muted no-print" style="margin-top:48px">Made with <a href="https://github.com/2018kguo/prtour">prtour</a></footer>
 </main>${TOGGLE_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
@@ -221,6 +229,21 @@ a.pr{font-family:var(--font-mono);font-size:.88em;color:var(--ws,var(--primary))
 .cmp input{grid-area:1/1;align-self:stretch;width:100%;margin:0;opacity:0;cursor:ew-resize}.cmp::after{content:"";position:absolute;top:0;bottom:0;left:var(--x);width:2px;background:var(--primary);pointer-events:none}
 .cmp-tag{position:absolute;top:10px;font:500 11px var(--font-mono);background:var(--background);padding:2px 6px;border-radius:4px;pointer-events:none}.cmp-b{left:10px}.cmp-a{right:10px}
 .appendix{padding-top:64px}
+.sec-h{font-size:24px;font-weight:700;margin:40px 0 16px}
+.pgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.pcard{display:flex;flex-direction:column;gap:10px;padding:22px;border:1px solid var(--border);border-radius:var(--radius-xl);background:var(--card);border-top:3px solid var(--ws);transition:box-shadow .15s}.pcard:hover{box-shadow:0 8px 24px -12px rgb(0 0 0/.18);color:inherit}
+.pcard .ic-chip{color:var(--ws)}.pcard-s{font-size:21px;line-height:1.3;font-weight:700;margin:0;text-wrap:balance}.pcard-d{font-size:14px;line-height:1.55;color:var(--muted-foreground);margin:0}
+.pcard-now{margin:auto 0 0;padding-top:12px;border-top:1px solid var(--border);font-size:14.5px;line-height:1.5;font-weight:500}.pcard-now .eyebrow{color:var(--add);margin-right:6px}
+.pain{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.pain>div{border-radius:var(--radius-lg);padding:18px 20px}.pain .eyebrow{margin-bottom:8px}
+.pain-before{background:color-mix(in oklab,var(--del) 8%,var(--background));border:1px solid color-mix(in oklab,var(--del) 22%,var(--background))}.pain-before .eyebrow{color:var(--del)}
+.pain-now{background:color-mix(in oklab,var(--add) 8%,var(--background));border:1px solid color-mix(in oklab,var(--add) 22%,var(--background))}.pain-now .eyebrow{color:var(--add)}
+.pain-s{font-size:16.5px;line-height:1.5;font-weight:600;margin:0}.pain-d{font-size:14px;line-height:1.55;color:var(--muted-foreground);margin:8px 0 0}
+.wins{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px}.wins li{position:relative;padding-left:22px;font-size:15.5px;line-height:1.55}.wins li::before{content:"";position:absolute;left:4px;top:.62em;width:8px;height:8px;border-radius:2px;background:var(--ws)}
+.ws-meta{display:flex;flex-direction:column;gap:10px}.lanes{gap:6px}.lanes .eyebrow{margin-right:4px}
+.ws-details[open]>summary{border-bottom:1px solid var(--border)}
+@media (max-width:760px){.pgrid,.pain{grid-template-columns:minmax(0,1fr)}}
+@media print{.pcard{break-inside:avoid}.ws-details{display:block}.ws-details>summary{display:none}.ws-details>div{display:flex!important}}
 .ws .figure img{max-height:440px;object-fit:contain;background:var(--muted)}
 @media (max-width:760px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.perday{flex-direction:column;align-items:stretch}.doc-title{font-size:30px}}
 @media print{.doc{max-width:none}.ws{break-before:page;padding-top:0}.metrics,.chartbox{break-inside:avoid}.dg-toggle,.cmp input,.cmp-tag{display:none}.cmp-after{clip-path:none}.cmp>img:first-child{display:none}details.disclosure:not(.ws-prs){display:none}}
