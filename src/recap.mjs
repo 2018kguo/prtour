@@ -60,7 +60,6 @@ export function resolveRecap(rc) {
       ...[w.aha ?? []].flat().map((a) => [`"${w.name}" aha`, a.body, 600]), ...(w.sections ?? []).map((x) => [`"${w.name}" section "${x.title}"`, x.body, 900])]),
     ...ws.flatMap((w) => (w.wins ?? []).map((x) => [`"${w.name}" win`, typeof x === 'string' ? x : x.text, 170])),
     ...ws.flatMap((w) => [[`"${w.name}" triedFirst`, w.triedFirst, 420], ...(w.steps?.items ?? []).flatMap((x) => [[`"${w.name}" step title`, x.title, 50], [`"${w.name}" step`, x.body, 150]])]),
-    ...(rc.problems ?? []).flatMap((x, i) => [[`problem ${i + 1} symptom`, x.symptom, 130], [`problem ${i + 1} howBad`, x.howBad, 200], [`problem ${i + 1} now`, x.now, 150]]),
     ...prs.map((p) => [`#${p.number} oneLiner`, p.oneLiner, 160])];
   for (const w of ws) {
     if (w.kind === 'feature') { if (!w.demo) warnings.push(`"${w.name}": a feature needs "demo": how to show it, in 1 to 4 steps`); }

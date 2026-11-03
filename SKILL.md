@@ -188,9 +188,7 @@ non-obvious idea that made the change work.
      there; don't repeat it above.
    Write `#12345` anywhere in prose and it links to the PR.
 4. Top of the report: `title`, `summary` (two or three sentences, opening with
-   what people were living with), `problems` (4 to 6 cards for "What was
-   broken": `{"icon", "symptom", "howBad", "now", "workstream": "<name>"}`, the
-   scariest user-facing ones first), `metrics` (optional "By the numbers" strip, `{"before": "504", "after":
+   what people were living with), the overview cards are built from each workstream's `symptom`/`now` (fixes) and `title`/`now`/`demo` (features), so write those well; `metrics` (optional "By the numbers" strip, `{"before": "504", "after":
    "321", "unit": "MB", "label": "idle chat-worker heap, from a zod upgrade"}`
    or `{"value", "label"}`), and `dayNotes` (`{"2026-10-28": "chat memory, OCR
    second reader"}`). Name agent lanes in `lanes` (`{"claude 3873de98": "Chat
