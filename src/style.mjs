@@ -5,7 +5,7 @@
 
 const S = (s) => `(?<=^|[.!?]["')\\]]?\\s+)${s}`; // at a sentence start
 export const TELLS = [
-  ['em dash', /—|\s–\s|\w\s?--\s?\w/g, 'use a period, comma or parentheses'],
+  ['em dash', /—|\s–\s|\w--\w|\w -- \w/g, 'use a period, comma or parentheses'],
   ['negative parallelism', new RegExp([
     `\\b(?:it|this|that)(?:'s| is) not (?:just |only |about )?[^.;:!?]{1,60}[,;:.] (?:it|this|that)(?:'s| is)\\b`,
     `\\b(?:isn't|is not|wasn't|was not|aren't|are not) (?:just|only|merely|simply) [^.;!?]{1,60}[,;:.] (?:it|they|this|that)\\b`,
@@ -39,5 +39,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   assert.equal(lint('Where to spend review time: the guard.').length, 1);
   assert.equal(lint('It adds a guard, ensuring safety.').length, 1);
   assert.equal(lint('Retire **effective** documents').length, 1);
+  assert.deepEqual(lint('It has a --changed mode.'), []);
+  assert.equal(lint('fast -- and safe').length, 1);
   console.log('style.mjs ok');
 }

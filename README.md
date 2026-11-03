@@ -13,7 +13,9 @@ One `tour.json` renders three ways:
   [@pierre/diffs](https://diffs.com) and need no server or network, so the file
   works as an artifact, an attachment, a static page or a `file://` URL.
 - **Markdown**: for a PR comment, Slack or chat.
-- **Terminal**: `prtour show`, colored and paged.
+- **Terminal**: `prtour show`, colored and paged. Diagrams draw as text, and
+  screenshots show inline in kitty, Ghostty, WezTerm and iTerm2.
+- **PDF**: `prtour render --format pdf`, through headless Chrome.
 
 ```sh
 npx prtour 123          # PR in this repo → scaffold → opens in the browser
@@ -78,6 +80,22 @@ The agent:
   the same file changed in two PRs appears once per PR.
 - Light and dark mode follow the system.
 
+## Recaps
+
+`prtour recap --author you --since 2026-10-27` gathers every PR you merged in
+that window. The agent groups them into themes by outcome and writes a line
+per PR. The page leads with graphics: a timeline of merges colored by theme,
+a breakdown of where the lines landed, and theme cards with their own
+diagrams and screenshots. It has no diffs. The same recap renders as
+Markdown (with a Mermaid timeline) for Slack or GitHub, as a PDF, and in the
+terminal.
+
+## Design
+
+Components come from [Basecoat](https://basecoatui.com), which is shadcn/ui
+in plain HTML and CSS, so pages need no build step and stay one file. Type is
+Geist. Diffs are [@pierre/diffs](https://diffs.com).
+
 ## Commands
 
 ```
@@ -85,10 +103,11 @@ prtour [target…]           init + open in the browser
 prtour init [target…]      fetch the diff, scaffold .prtour/<slug>/tour.json (--stack, --dir)
 prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
 prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
-prtour render [dir]        self-contained HTML (-o file; --format md|term; --split; --wrap)
+prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf; --split; --wrap)
 prtour show [dir]          terminal view
 prtour open [dir]          live-reload server + reviewer feedback
 prtour feedback [dir]      reviewer comments as Markdown (--clear)
+prtour recap               what shipped across many PRs (--author, --since, --until, --repo)
 prtour skill [--install]   agent instructions
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -

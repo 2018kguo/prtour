@@ -69,6 +69,24 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
    check, and why, in one to three sentences. Don't narrate what the code
    does. If you suspect a bug, say so in the note's first words.
 
+## Visuals
+
+A picture of the change is often what a human needs most. Every visual
+renders in the HTML and PDF, as Mermaid on GitHub, and as text in the terminal
+(inline images in kitty, Ghostty, WezTerm and iTerm2).
+
+- `diagram` (top level or per chapter) is the before/after map: what calls what
+  after the change. Mark nodes `"change": "new"` or `"changed"`, and give each
+  the `chapter` that explains it. Use 3 to 8 nodes; it is a map, not a call
+  graph. Edge labels are a word or two.
+  `{"title": "Before / after", "caption": "Shared content reaches a thread", "nodes": [{"id": "a", "label": "MainActivity"}, {"id": "b", "label": "OnNewIntent", "change": "new", "chapter": 2}], "edges": [{"from": "a", "to": "b", "label": "intent"}]}`
+- `mermaid` (top level or per chapter) is for sequence or state diagrams the
+  map can't show: `"mermaid": "sequenceDiagram\n  App->>Pane: capture"`.
+- `images` (top level or per chapter) are screenshots or short clips:
+  `[{"src": "shots/after.png", "caption": "The record page after"}]`, with
+  paths relative to the tour folder. For any UI change, a before/after
+  screenshot says more than the diff. Images are embedded in the HTML.
+
 ## Writing
 
 The reviewer is a peer reading fast. Write plainly, in the codebase's own
@@ -108,8 +126,29 @@ and reports each hit with a fix.
      artifact, an attachment or a static page. In a PR comment, post
      `npx prtour render --format md` (add `--link <url>` if the HTML is hosted).
    - Terminal: `npx prtour show`.
+   - PDF: `npx prtour render --format pdf` (needs Chrome, Chromium or Edge).
    In your reply, list what you hid and why (dependencies and manifest changes
    in one line), and give the reading order as `n/N file:line`.
+
+## Recaps: what shipped across many PRs
+
+For "what did X ship this week", "summarize my PRs since Monday", or a team
+update, use a recap instead of a tour. It is about outcomes, not diffs.
+
+1. `npx prtour recap --author <login> --since YYYY-MM-DD [--until …] [--repo o/r]`
+   writes `.prtour/recap-<login>-<since>/recap.json` with every merged PR (title,
+   date, size, area, and the PR description for you to read).
+2. Group the PRs into 2 to 6 `themes` by outcome, not by directory. For each
+   theme, write a `title` naming the outcome, a `body` of one or two sentences,
+   and an optional `outcome` line: what is now true, or what is still pending.
+   A theme can carry a `diagram`, `mermaid` or `images` like a chapter.
+3. Give every PR a `oneLiner`: what it did, in plain words, under 140 chars.
+4. Write a two- or three-sentence `summary`. Add optional `highlights` (numbers
+   worth showing, e.g. `{"value": "40%", "label": "faster cold start"}`), but
+   only numbers you can point to.
+5. Run `npx prtour check`. The same writing lint applies. Then
+   `npx prtour render` (HTML), `--format md` (Slack or GitHub),
+   `--format pdf`, or `npx prtour show`.
 
 ## tour.json
 

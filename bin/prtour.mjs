@@ -10,6 +10,7 @@ import { renderHTML } from '../src/html.mjs';
 import { renderMarkdown, renderTerminal } from '../src/text.mjs';
 import { detect } from '../src/term-images.mjs';
 import { htmlToPdf } from '../src/pdf.mjs';
+import { renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -28,6 +29,8 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
            --images kitty|iterm|none   inline images; default probes the terminal
   prtour open [dir]          serve with live reload; reviewer comments -> feedback.json
   prtour feedback [dir]      print reviewer comments as Markdown (--clear to reset)
+  prtour recap               what shipped: merged PRs by one author over days, graphics first
+           --author <login> --since YYYY-MM-DD [--until] [--repo o/r]   (default: you, last 7 days)
   prtour skill [--install]   print the agent skill (or write .claude/skills/prtour/SKILL.md)
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
@@ -45,7 +48,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-o' || a === '--out') flags.out = argv[++i];
-    else if (a === '--format' || a === '--port' || a === '--dir' || a === '--images') flags[a.slice(2)] = argv[++i];
+    else if (['--format', '--port', '--dir', '--images', '--author', '--since', '--until', '--repo', '--link'].includes(a)) flags[a.slice(2)] = argv[++i];
     else if (a === '-h') flags.help = true;
     else if (a.startsWith('--')) flags[a.slice(2)] = true;
     else pos.push(a);
@@ -55,14 +58,30 @@ function parseArgs(argv) {
 
 const workRoot = () => path.join(trySh('git', ['rev-parse', '--show-toplevel'])?.trim() || process.cwd(), '.prtour');
 
+const specOf = (d) => ['tour.json', 'recap.json'].map((f) => path.join(d, f)).find((f) => fs.existsSync(f));
+
 function findDir(arg) {
-  if (arg && fs.existsSync(path.join(arg, 'tour.json'))) return path.resolve(arg);
+  if (arg && specOf(arg)) return path.resolve(arg);
   const base = workRoot();
-  if (arg && fs.existsSync(path.join(base, arg, 'tour.json'))) return path.join(base, arg);
+  if (arg && specOf(path.join(base, arg))) return path.join(base, arg);
   if (arg) die(`no tour at ${arg} (run \`prtour init\` first)`);
-  const dirs = fs.existsSync(base) ? fs.readdirSync(base).map((d) => path.join(base, d)).filter((d) => fs.existsSync(path.join(d, 'tour.json'))) : [];
-  if (!dirs.length) die('no tours yet; run `prtour init <pr|range>`');
-  return dirs.sort((a, b) => fs.statSync(path.join(b, 'tour.json')).mtimeMs - fs.statSync(path.join(a, 'tour.json')).mtimeMs)[0];
+  const dirs = fs.existsSync(base) ? fs.readdirSync(base).map((d) => path.join(base, d)).filter((d) => specOf(d)) : [];
+  if (!dirs.length) die('no tours yet; run `prtour init <pr|range>` or `prtour recap`');
+  return dirs.sort((a, b) => fs.statSync(specOf(b)).mtimeMs - fs.statSync(specOf(a)).mtimeMs)[0];
+}
+
+const isRecap = (dir) => fs.existsSync(path.join(dir, 'recap.json'));
+
+function loadRecap(dir) {
+  let rc;
+  try { rc = JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8')); } catch (e) { die(`${dir}/recap.json is not valid JSON: ${e.message}`); }
+  const r = resolveRecap(rc);
+  for (const im of (rc.themes ?? []).flatMap((t) => t.images ?? [])) {
+    if (!im?.src || /^https?:/.test(im.src)) continue;
+    im.abs = path.resolve(dir, im.src);
+    if (!fs.existsSync(im.abs)) r.warnings.push(`image ${im.src} not found (paths are relative to ${rel(dir)})`);
+  }
+  return r;
 }
 
 function load(dir) {
@@ -180,6 +199,7 @@ function writeTour(dir, files, meta, parts, flags) {
 // ---- outputs --------------------------------------------------------------
 
 async function render(dir, flags) {
+  if (isRecap(dir)) return renderRecap(dir, flags);
   const r = load(dir);
   const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
   if (fmt === 'pdf') {
@@ -196,7 +216,46 @@ async function render(dir, flags) {
   console.log(out);
 }
 
+async function renderRecap(dir, flags) {
+  const r = loadRecap(dir);
+  for (const w of r.warnings) console.error(`warning: ${w}`);
+  const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
+  if (fmt === 'pdf') {
+    const out = path.resolve(flags.out ?? path.join(dir, 'recap.pdf'));
+    try { htmlToPdf(renderRecapHTML(r, { print: true }), out); } catch (e) { die(e.message); }
+    return console.log(out);
+  }
+  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'term' ? renderRecapTerminal(r, { color: process.stdout.isTTY && !flags['no-color'] }) : renderRecapHTML(r);
+  if (fmt !== 'html' && !flags.out) return process.stdout.write(text);
+  const out = path.resolve(flags.out ?? path.join(dir, 'index.html'));
+  fs.writeFileSync(out, text);
+  console.log(out);
+}
+
+// Merged PRs by one author in a date window, scaffolded into recap.json.
+function recap(flags) {
+  const author = flags.author ?? trySh('gh', ['api', 'user', '--jq', '.login'])?.trim();
+  if (!author) die('pass --author <github login> (gh could not tell who you are)');
+  const since = flags.since ?? new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+  const until = flags.until ?? new Date().toISOString().slice(0, 10);
+  const repo = flags.repo ? ['-R', flags.repo] : [];
+  const json = trySh('gh', ['pr', 'list', ...repo, '--state', 'merged', '--author', author, '--search', `merged:${since}..${until}`, '--limit', '300', '--json', 'number,title,url,mergedAt,additions,deletions,changedFiles,files,body']);
+  if (!json) die('gh could not list PRs (is `gh auth status` ok, and are you in a repo or passing --repo?)');
+  const prs = JSON.parse(json);
+  if (!prs.length) die(`no merged PRs by ${author} between ${since} and ${until}`);
+  const name = flags.repo ?? (prs[0].url.match(/github\.com\/([^/]+\/[^/]+)\//) ?? [])[1];
+  const dir = makeDir(`recap-${author}-${since}`, flags);
+  const p = path.join(dir, 'recap.json');
+  if (fs.existsSync(p) && !flags.force) die(`${rel(p)} exists (--force to re-scaffold)`);
+  fs.writeFileSync(p, `${JSON.stringify(scaffoldRecap(prs, { title: `What shipped, ${since} to ${until}`, author, repo: name, since, until }), null, 2)}\n`);
+  console.log(`${rel(dir)}: ${prs.length} merged PRs by ${author}, ${since}..${until}`);
+  for (const x of prs) console.log(`  #${x.number} ${x.mergedAt.slice(0, 10)} +${x.additions} -${x.deletions} ${x.title}`);
+  console.log(`\nnext: write themes and oneLiners in ${rel(p)}, then \`prtour check\` and \`prtour render\``);
+  return dir;
+}
+
 async function show(dir, flags) {
+  if (isRecap(dir)) return process.stdout.write(renderRecapTerminal(loadRecap(dir), { color: !flags['no-color'] }));
   const images = await detect(flags.images ?? (flags['no-images'] ? 'none' : 'auto'));
   const text = renderTerminal(load(dir), { color: !flags['no-color'], width: Math.min(process.stdout.columns || 100, 120), images });
   // A pager would mangle image escapes, so pages with images print straight through.
@@ -207,6 +266,12 @@ async function show(dir, flags) {
 }
 
 function check(dir) {
+  if (isRecap(dir)) {
+    const r = loadRecap(dir);
+    console.log(`${r.stats.prs} PRs, ${r.themes.length} themes, ${r.stats.days} day${r.stats.days === 1 ? "" : "s"} with merges`);
+    for (const w of r.warnings) console.log(`warning: ${w}`);
+    process.exit(r.warnings.length ? 1 : 0);
+  }
   const r = load(dir);
   const s = r.stats;
   const unsorted = r.chapters.at(-1)?.title === 'Unsorted' && r.warnings.some((w) => w.includes('in no chapter'));
@@ -251,12 +316,12 @@ async function serve(dir, flags) {
   const clients = new Set();
   let html = '';
   const build = async () => {
-    try { html = await renderHTML(load(dir), { ...flags, live: true }); } catch (e) { html = `<pre>${String(e.stack).replace(/</g, '&lt;')}</pre><script>new EventSource('/events').onmessage=()=>location.reload()</script>`; }
+    try { html = isRecap(dir) ? renderRecapHTML(loadRecap(dir)).replace('</body>', "<script>new EventSource('/events').onmessage=()=>location.reload()</script></body>") : await renderHTML(load(dir), { ...flags, live: true }); } catch (e) { html = `<pre>${String(e.stack).replace(/</g, '&lt;')}</pre><script>new EventSource('/events').onmessage=()=>location.reload()</script>`; }
     for (const res of clients) res.write('data: reload\n\n');
   };
   await build();
   let timer;
-  fs.watch(dir, (_, name) => { if (name === 'tour.json' || name === 'diff.patch') { clearTimeout(timer); timer = setTimeout(build, 100); } });
+  fs.watch(dir, (_, name) => { if (name === 'tour.json' || name === 'diff.patch' || name === 'recap.json') { clearTimeout(timer); timer = setTimeout(build, 100); } });
   const fbPath = path.join(dir, 'feedback.json');
   const server = http.createServer((req, res) => {
     if (req.url === '/events') {
@@ -310,6 +375,7 @@ const COMMANDS = {
   hunks: () => hunks(findDir(flags.dir), pos, flags),
   feedback: () => feedback(findDir(flags.dir ?? pos[0]), flags),
   skill: () => skill(flags),
+  recap: () => recap(flags),
 };
 if (cmd === '-h' || cmd === '--help' || cmd === 'help' || flags.help || flags.h) console.log(HELP);
 else if (COMMANDS[cmd]) await COMMANDS[cmd]();

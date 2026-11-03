@@ -96,4 +96,19 @@ assert.match(run('check', st), /0 partial; review 8\/12 lines/);
 const shtml = fs.readFileSync(run('render', st).trim(), 'utf8');
 assert.match(shtml, /<span slot="header-prefix" style="margin-right:6px"><span class="badge" data-variant="outline">#p2<\/span><\/span>/);
 assert.match(run('render', st, '--format', 'md'), /`#p2 src\/cache.ts:3`/);
+// Recap: themes over many PRs, graphics first, no diffs.
+const rd = path.join(dir, 'recap');
+fs.mkdirSync(rd);
+const pr = (number, mergedAt, area) => ({ number, title: `t${number}`, url: `https://x/${number}`, mergedAt, additions: 10, deletions: 2, files: 1, area, oneLiner: `Change ${number}.` });
+fs.writeFileSync(path.join(rd, 'recap.json'), JSON.stringify({ kind: 'recap', title: 'Week', since: '2026-10-27', until: '2026-11-03', summary: 'Two things shipped.',
+  prs: [pr(1, '2026-10-28T10:00:00Z', 'apps/web'), pr(2, '2026-10-30T10:00:00Z', 'packages/db'), pr(3, '2026-11-02T10:00:00Z', 'apps/web')],
+  themes: [{ title: 'Faster reads', body: 'Reads got cheaper.', prs: [1, 3], diagram: { nodes: [{ id: 'a', label: 'read' }, { id: 'b', label: 'cache', change: 'new' }], edges: [{ from: 'a', to: 'b' }] } }, { title: 'Schema', body: 'One index.', prs: [2] }] }));
+assert.match(run('check', rd), /3 PRs, 2 themes, 3 days with merges/);
+const rhtml = fs.readFileSync(run('render', rd).trim(), 'utf8');
+assert.match(rhtml, /<svg class="tl"/);
+assert.equal((rhtml.match(/<circle /g) ?? []).length, 3);
+assert.match(rhtml, /id="theme-2"/);
+assert.doesNotMatch(rhtml, /diffs-container/);
+assert.match(run('render', rd, '--format', 'md'), /```mermaid\ntimeline\n  section Faster reads/);
+assert.match(run('show', rd, '--no-color'), /━━ Faster reads/);
 console.log('smoke ok');
