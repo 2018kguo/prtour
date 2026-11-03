@@ -52,7 +52,7 @@ details.disclosure>summary::before{content:"›";color:var(--muted-foreground);t
 pre.mermaid{margin:0;font:12.5px var(--font-mono);color:var(--muted-foreground);white-space:pre-wrap}pre.mermaid[data-processed]{color:inherit;display:flex;justify-content:center}
 .figure{margin:0}.figure img,.figure video{display:block;width:100%;height:auto}.figure figcaption{padding:10px 16px;font-size:13px;color:var(--muted-foreground);border-top:1px solid var(--border)}
 @media (max-width:960px){.split,.rail{grid-template-columns:minmax(0,1fr);gap:24px}.rail-side{position:static;max-height:none}}
-@media print{.tabbar,.no-print{display:none!important}.panel,.card,details.disclosure{break-inside:avoid-page;box-shadow:none}.rail-side{position:static;max-height:none}.page{padding-bottom:0}}
+@media print{.tabbar,.no-print{display:none!important}.card,details.disclosure{break-inside:avoid-page;box-shadow:none}.panel{box-shadow:none}.rail-side{position:static;max-height:none}.page{padding-bottom:0}}
 `;
 
 export const CSS = BASECOAT + LAYOUT;

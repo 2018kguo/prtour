@@ -9,6 +9,7 @@ import { kindOf, resolve, scaffold } from '../src/tour.mjs';
 import { renderHTML } from '../src/html.mjs';
 import { renderMarkdown, renderTerminal } from '../src/text.mjs';
 import { detect } from '../src/term-images.mjs';
+import { htmlToPdf } from '../src/pdf.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -21,7 +22,7 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
   prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
   prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
   prtour render [dir]        write a self-contained HTML file (default <dir>/index.html)
-           --format md|term  Markdown (PR comment) or terminal output to stdout
+           --format md|term|pdf  Markdown (PR comment), terminal, or PDF (needs Chrome)
            -o <file>         output path   --split  side-by-side   --wrap  wrap lines
   prtour show [dir]          the tour in the terminal (ANSI, paged)
            --images kitty|iterm|none   inline images; default probes the terminal
@@ -180,7 +181,13 @@ function writeTour(dir, files, meta, parts, flags) {
 
 async function render(dir, flags) {
   const r = load(dir);
-  const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : 'html');
+  const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
+  if (fmt === 'pdf') {
+    for (const w of r.warnings) console.error(`warning: ${w}`);
+    const out = path.resolve(flags.out ?? path.join(dir, 'review.pdf'));
+    try { htmlToPdf(await renderHTML(r, { ...flags, print: true }), out); } catch (e) { die(e.message); }
+    return console.log(out);
+  }
   const text = fmt === 'md' ? renderMarkdown(r, { link: flags.link }) : fmt === 'term' ? renderTerminal(r, { color: process.stdout.isTTY && !flags['no-color'] }) : await renderHTML(r, flags);
   for (const w of r.warnings) console.error(`warning: ${w}`);
   if (fmt !== 'html' && !flags.out) return process.stdout.write(text);

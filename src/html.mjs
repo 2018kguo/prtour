@@ -26,7 +26,7 @@ export function md(text) {
   }).join('');
 }
 
-const OPTS = (o) => ({ theme: { dark: 'pierre-dark', light: 'pierre-light' }, themeType: 'system', diffStyle: o.split ? 'split' : 'unified', overflow: o.wrap ? 'wrap' : 'scroll', unsafeCSS: '[data-column-number]{cursor:pointer}' });
+const OPTS = (o) => ({ theme: { dark: 'pierre-dark', light: 'pierre-light' }, themeType: o.print ? 'light' : 'system', diffStyle: o.split ? 'split' : 'unified', overflow: o.wrap || o.print ? 'wrap' : 'scroll', unsafeCSS: '[data-column-number]{cursor:pointer}' });
 
 const noteHTML = (n) => `<div class="callout note" id="note-${n.n}" data-note="${n.n}"><span class="num" title="${esc(n.label)}">${n.n}</span><div class="callout-body">${n.title ? `<b>${esc(n.title)}</b> ` : ''}${md(n.body).replace(/^<p>|<\/p>$/g, '')}</div>${ui.btn('Reply', `data-reply="${n.n}"`)}</div>`;
 
@@ -185,7 +185,7 @@ diffs-container{display:block}
 .note{border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.card>.note:first-child{border-top:0}
 .note .btn{opacity:0}.note:hover .btn{opacity:1}.note.focus{box-shadow:inset 3px 0 0 var(--primary)}
 main>div>footer{margin-top:48px}
-@media print{.chapter{break-before:page;margin:0}.rail{grid-template-columns:1fr}.intro{margin-bottom:0}[data-panel=files]{display:block!important;break-before:page}[data-panel=files] details>diffs-container{display:none}}
+@media print{body{font-size:12.5px}.hero{padding-top:0}.chapter{break-before:page;margin:0;display:block}.chapter .rail-side{margin-bottom:16px}.rail-main{gap:12px}.intro{margin-bottom:0}.split{grid-template-columns:minmax(0,1fr)}[data-panel=files]{display:block!important;break-before:page}[data-panel=files] details>diffs-container{display:none}details.disclosure>summary::before{display:none}.note .btn,.file-rev,.rail-side .row{display:none}.chapter .rail-side{break-after:avoid}}
 `;
 
 // Put the shared block back into each shadow root: CSS as one adopted sheet, the sprite cloned.
