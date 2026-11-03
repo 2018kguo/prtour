@@ -1,3 +1,5 @@
+import { lint, stripCode } from './style.mjs';
+
 // tour.json: scaffold it from a diff, then resolve it against the diff into
 // exactly what each renderer shows (chapters, numbered notes, hidden files).
 
@@ -9,6 +11,7 @@ const KINDS = [
   ['manifest', /(^|\/)(package\.json|Cargo\.toml|pyproject\.toml|go\.mod|Gemfile|requirements[^/]*\.txt|tsconfig[^/]*\.json|\.github\/.*\.ya?ml|Dockerfile|[^/]*\.(toml|ya?ml))$/],
   ['docs', /\.(md|mdx|rst|txt)$/i],
 ];
+export const BUDGET = { notes: 8, chapters: 5, lines: 400 };
 const HIDE_BY_DEFAULT = { lockfile: 'Lockfiles', generated: 'Generated files and snapshots', test: 'Tests', manifest: 'Manifests and config (summarize them in `skipped`)' };
 
 export const kindOf = (path) => KINDS.find(([, re]) => re.test(path))?.[0] ?? 'code';
@@ -111,6 +114,26 @@ export function resolve(tour, files) {
   const count = (f, hs) => (hs ?? f.hunks.map((_, i) => i)).reduce((s, i) => s + (f.hunks[i]?.additions ?? 0) + (f.hunks[i]?.deletions ?? 0), 0);
   const total = files.reduce((s, f) => s + f.additions + f.deletions, 0);
   const shown = chapters.flatMap((c) => c.entries).reduce((s, e) => s + count(e.file, e.hunks), 0);
+  // The page is for human alignment, not a walkthrough: keep it short and plain.
+  const realChapters = chapters.filter((c) => c.title !== 'Unsorted').length;
+  const over = [
+    notes.length > BUDGET.notes && `${notes.length} notes (budget ${BUDGET.notes})`,
+    realChapters > BUDGET.chapters && `${realChapters} chapters (budget ${BUDGET.chapters})`,
+    shown > BUDGET.lines && `${shown} lines shown (budget ${BUDGET.lines})`,
+  ].filter(Boolean);
+  if (over.length && !tour.allowLarge) warnings.push(`too much to review: ${over.join(', ')}. Hide what follows from the decisions, or set "allowLarge": "<why this PR needs it>"`);
+  const texts = [
+    ['summary', [tour.summary ?? ''].flat().join('\n\n'), 500],
+    ...(tour.steps ?? []).map((x, i) => [`step ${i + 1}`, x, 160]),
+    ...(tour.chapters ?? []).flatMap((c, i) => [[`chapter ${i + 1} title`, c.title, 80], [`chapter ${i + 1} body`, c.body ?? c.explanation, 280]]),
+    ...notes.flatMap((n) => [[`note ${n.n} title`, n.title, 70], [`note ${n.n}`, n.body, 320]]),
+    ['skipped', tour.skipped, 300],
+  ];
+  for (const [where, text, max] of texts) {
+    for (const hit of lint(text)) warnings.push(`writing, ${where}: ${hit}`);
+    if (stripCode(text).length > max) warnings.push(`writing, ${where}: ${stripCode(text).length} chars (max ${max}); say less`);
+  }
+
   const parts = (tour.parts ?? []).map((p) => {
     const fs = files.filter((f) => f.part === p.key);
     return { ...p, files: fs.length, additions: fs.reduce((n, f) => n + f.additions, 0), deletions: fs.reduce((n, f) => n + f.deletions, 0) };

@@ -121,7 +121,7 @@ ${r.warnings.length && !o.quiet ? `<details class="warn"><summary>${r.warnings.l
 ${r.parts.length ? `<h3>Stack</h3><ol class="stack">${r.parts.map((p) => `<li><span class="part">#${esc(p.key)}</span> ${p.url ? `<a href="${esc(p.url)}">${esc(p.title ?? '')}</a>` : esc(p.title ?? '')} <span class="muted">${[p.state && p.state.toLowerCase(), (p.base || p.head) && `${esc(p.base ?? '')} ← ${esc(p.head ?? '')}`, `${p.files} files`].filter(Boolean).join(' · ')}</span> ${counts(p.additions, p.deletions)}</li>`).join('')}</ol>` : ''}
 ${t.steps?.length ? `<ol class="steps">${t.steps.map((x) => `<li>${md(x).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ol>` : ''}
 ${r.notes.length ? `<h3>Reading order</h3><ol class="order">${r.notes.map((n) => `<li><a href="#note-${n.n}">${esc(n.title || n.body.slice(0, 80))}</a> <span class="muted">${esc(n.where)}</span></li>`).join('')}</ol>` : ''}
-${t.skipped ? `<h3>Left out of review</h3>${md(t.skipped)}` : ''}</section>
+${t.skipped ? `<h3>Left out of review</h3>${md(t.skipped)}` : ''}${t.allowLarge ? `<p class="muted small">Over the review budget: ${esc(t.allowLarge)}</p>` : ''}</section>
 ${chapters.join('\n')}
 ${hidden.length ? `<section id="hidden" class="hidden"><h2>Not in review</h2><p class="muted">These are still in the PR. Open any file to read it anyway.</p>${hidden.join('')}</section>` : ''}
 <footer class="muted small">Made with <a href="https://github.com/2018kguo/prtour">prtour</a> · diffs by <a href="https://diffs.com">@pierre/diffs</a></footer>

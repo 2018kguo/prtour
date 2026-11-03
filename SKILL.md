@@ -29,29 +29,71 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
      not write into the repo. Every later command takes that folder as its
      first argument or as `--dir`. With no folder given, commands use the
      newest tour under `.prtour/`.
-2. **Read the diff** (`.prtour/<slug>/diff.patch`) and decide what a careful
-   maintainer must review. **Show** core data layouts, non-trivial algorithms,
-   control flow, public APIs, schema changes, security and money paths. **Hide**
-   tests, constructors, trivial accessors, mechanical renames, small helpers,
-   generated files, lockfiles and snapshots. These stay in the PR, and the page
-   lists them as not in review.
-3. **Write `tour.json`** (schema below). Order chapters by idea, not by directory:
-   data shapes first, then the flow through the algorithms, and supporting
-   changes last. If one file mixes core and boilerplate, list only its core hunks
-   with `{"path": "...", "hunks": [0, 3]}`. One file can be split across
-   chapters this way, and each hunk shows only once. A later plain or glob
-   entry for the same file takes the hunks that are left.
+2. **Pick what a human must align on.** The page is not a code walkthrough.
+   The reader trusts the tests and the agent for gruntwork. They want to see
+   the decisions they might disagree with, and nothing else. Show only:
+   - the shape of new data, APIs and contracts (schemas, types other code
+     depends on, wire formats);
+   - decisions with a real alternative, where a reviewer could say "no, do it
+     the other way";
+   - behavior that users or other systems will notice;
+   - risk: access control, data loss, migrations, concurrency, money, and
+     anything you suspect is a bug.
+
+   Hide everything that follows from those decisions, even in core files:
+   wiring, plumbing, handlers that call the function you already showed, UI
+   that renders what the server decided, client mirrors of server checks,
+   validation boilerplate, moved or renamed code, helpers, tests, and
+   generated files. Hidden code stays in the PR, and the page lists it as not
+   in review.
+
+   **Budget:** at most 8 notes, 5 chapters and 400 shown lines, whatever the
+   size of the PR. For most PRs, 3–5 notes and 100–250 lines are right.
+   `check` fails over budget. If a PR truly needs more, set
+   `"allowLarge": "<one sentence on why>"`.
+3. **Write `tour.json`** (schema below). Order chapters by decision, not by
+   directory. To show part of a file, list its hunks with
+   `{"path": "...", "hunks": [0, 3]}`. One file can be split across chapters
+   this way, and each hunk shows only once.
    `npx prtour hunks <path-substring> --lines` prints each hunk's index and
    line range, and every line with its old and new line numbers. Use it to
    pick hunks and to anchor notes; don't count lines by hand.
-4. **Annotate.** Add one note per stop in `notes`, in reading order (they are
-   numbered `1/N`, `2/N`, …, so put them in chapter order). Anchor each note to a line that is in a shown
-   hunk: `line` is the new-file line number, or the old one with
-   `"side": "old"` for a deleted line. Say why the code is shaped this way,
-   what could break, and what to check. Don't restate the code.
+4. **Annotate.** Add one note per decision or risk, in reading order (notes
+   are numbered `1/N` in array order, so keep them in chapter order). Anchor
+   each note to a shown line: `line` is the new-file line number, or the old
+   one with `"side": "old"`. A note says what the reviewer should decide or
+   check, and why, in one to three sentences. Don't narrate what the code
+   does. If you suspect a bug, say so in the note's first words.
+
+## Writing
+
+The reviewer is a peer reading fast. Write plainly, in the codebase's own
+terms.
+
+- The summary is two or three sentences: what changed and why.
+- A chapter body is one or two sentences. A note body is one to three.
+  `check` enforces the lengths.
+- Use plain sentences of varied length. Don't use bold, em dashes, `->` in
+  prose, or lists of fragments.
+- Don't signpost ("Where to spend review time:", "The key thing is"). Don't
+  write "it's not X, it's Y" or "not just X but Y". Don't answer your own
+  question ("The result? A leak."). Don't add a summary or moral at the end.
+- Drop trailing "-ing" clauses that claim importance (", ensuring safety").
+  Write "is", not "serves as". Cut "additionally", "moreover", "notably",
+  "ultimately".
+- Don't use delve, pivotal, crucial, robust, leverage, seamless, landscape,
+  or the adverbs quietly, deeply and truly.
+- Put code identifiers in backticks. Text inside backticks isn't linted.
+- End on the last concrete point.
+
+`check` runs a lint for these tells (ported from Sprout) on every text field
+and reports each hit with a fix.
+
 5. **Check.** Run `npx prtour check`. It exits 1 and names the problem when a
-   file is unplaced, a path is wrong, or a note points at a line that isn't
-   shown. Fix it until the check is clean.
+   file is unplaced, a path is wrong, a note points at a line that isn't
+   shown, the tour is over budget, or the writing trips the lint. Fix it until
+   the check is clean. Don't rephrase just to dodge the lint; write the
+   sentence plainly.
 6. **Deliver**, depending on where you are:
    - Local with a human: `npx prtour open` serves the page with live reload.
      Every save of `tour.json` refreshes the page. Comments the reviewer leaves
@@ -72,23 +114,24 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
   "title": "feat: pass through hosts whose clients refuse our cert",
   "url": "https://github.com/o/r/pull/24", "number": 24, "author": "me",
   "base": "main", "head": "issue-24",
-  "summary": "What changed and why, 1-2 short paragraphs. Markdown: `code`, **bold**, lists, links.",
-  "steps": ["Short end-to-end flow of the change", "3-6 steps"],
+  "summary": "Hosts whose clients reject our certificate now pass through untouched. The proxy replays the `ClientHello` upstream and splices the two sockets.",
+  "steps": ["Optional: 2-4 short steps of the flow, only if the summary can't carry it"],
   "chapters": [
     { "title": "Record a passthrough on the connection",
-      "body": "1-3 plain sentences for a reviewer who hasn't seen the diff.",
+      "body": "A passthrough is its own type on `Connection`, not a variant of `Tunnel`.",
       "files": ["crates/core/src/connection.rs", { "path": "crates/proxy/src/connect.rs", "hunks": [1, 2] }] }
   ],
   "notes": [
     { "file": "crates/core/src/connection.rs", "line": 55, "title": "The relay's record",
-      "body": "Mirrors Tunnel's shape but is its own type; bytes_up includes the replayed ClientHello." },
-    { "file": "crates/proxy/src/connect.rs", "line": 88, "side": "old", "body": "Removed fallback: …" }
+      "body": "`bytes_up` counts the replayed `ClientHello`, so a relay that dies right after dialing still shows what it sent. Check that billing reads this the same way." },
+    { "file": "crates/proxy/src/connect.rs", "line": 88, "side": "old", "title": "Likely bug: fallback removed",
+      "body": "Clients that refuse the cert used to retry over plain HTTP here. Nothing replaces that path." }
   ],
   "hidden": [
     { "reason": "Tests", "files": ["**/*_test.rs", "tests/**"] },
     { "reason": "Small helpers and accessors", "files": ["crates/core/src/util.rs"] }
   ],
-  "skipped": "Manifests: adds `rustls 0.23` to faim-proxy; enables the `ring` feature."
+  "skipped": "Adds `rustls 0.23` to faim-proxy with the `ring` feature."
 }
 ```
 
@@ -97,6 +140,8 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
   in an "Unsorted" chapter with a warning.
 - Notes on files outside every chapter, or on lines outside the shown hunks,
   get a warning and are shown at the top of the file.
+- `allowLarge` (optional) is shown on the page as the reason the tour is over
+  budget.
 - `description`, `repo` and `parts` come from `init` and are context for you;
   only `parts` is rendered (as the Stack list). Leave them in place.
 - Re-running `init` refreshes `diff.patch` and keeps your `tour.json`; add
