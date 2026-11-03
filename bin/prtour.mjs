@@ -227,17 +227,34 @@ async function render(dir, flags) {
   console.log(out);
 }
 
+// Patches for the targeted diffs a recap shows, fetched once into <dir>/diffs/.
+function withPatches(r, dir) {
+  const want = new Set((r.rc.workstreams ?? r.rc.themes ?? []).flatMap((w) => (w.diffs ?? []).map((d) => d.pr)));
+  r.patches = new Map();
+  for (const n of want) {
+    const f = path.join(dir, 'diffs', `${n}.patch`);
+    if (!fs.existsSync(f)) {
+      const diff = trySh('gh', ['pr', 'diff', String(n), ...(r.rc.repo ? ['-R', r.rc.repo] : [])]);
+      if (!diff) { r.warnings.push(`diff: could not fetch PR #${n} (gh)`); continue; }
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, diff);
+    }
+    r.patches.set(n, splitPatch(fs.readFileSync(f, 'utf8')));
+  }
+  return r;
+}
+
 async function renderRecap(dir, flags) {
-  const r = loadRecap(dir);
+  const r = withPatches(loadRecap(dir), dir);
   await withIcons(r, r.rc);
   for (const w of r.warnings) console.error(`warning: ${w}`);
   const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
   if (fmt === 'pdf') {
     const out = path.resolve(flags.out ?? path.join(dir, 'recap.pdf'));
-    try { htmlToPdf(renderRecapHTML(r, { print: true }), out); } catch (e) { die(e.message); }
+    try { htmlToPdf(await renderRecapHTML(r, { print: true }), out); } catch (e) { die(e.message); }
     return console.log(out);
   }
-  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'term' ? renderRecapTerminal(r, { color: process.stdout.isTTY && !flags['no-color'] }) : renderRecapHTML(r);
+  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'term' ? renderRecapTerminal(r, { color: process.stdout.isTTY && !flags['no-color'] }) : await renderRecapHTML(r);
   if (fmt !== 'html' && !flags.out) return process.stdout.write(text);
   const out = path.resolve(flags.out ?? path.join(dir, 'index.html'));
   fs.writeFileSync(out, text);
@@ -345,7 +362,7 @@ async function serve(dir, flags) {
   const clients = new Set();
   let html = '';
   const build = async () => {
-    try { html = isRecap(dir) ? renderRecapHTML(loadRecap(dir)).replace('</body>', "<script>new EventSource('/events').onmessage=()=>location.reload()</script></body>") : await renderHTML(load(dir), { ...flags, live: true }); } catch (e) { html = `<pre>${String(e.stack).replace(/</g, '&lt;')}</pre><script>new EventSource('/events').onmessage=()=>location.reload()</script>`; }
+    try { html = isRecap(dir) ? (await renderRecapHTML(await withIcons(withPatches(loadRecap(dir), dir), JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8'))))).replace('</body>', "<script>new EventSource('/events').onmessage=()=>location.reload()</script></body>") : await renderHTML(load(dir), { ...flags, live: true }); } catch (e) { html = `<pre>${String(e.stack).replace(/</g, '&lt;')}</pre><script>new EventSource('/events').onmessage=()=>location.reload()</script>`; }
     for (const res of clients) res.write('data: reload\n\n');
   };
   await build();

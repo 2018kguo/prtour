@@ -139,63 +139,70 @@ and reports each hit with a fix.
 
 ## Recaps: what shipped across many PRs
 
-For "what did X ship this week", a team update, or a write-up of a stretch of
-work, use a recap. A recap is a workstream report for humans. It is about
-impact, the reasoning behind it, and the aha moments, not diffs. The reader
-should come away knowing what was wrong before, what changed, and the
-non-obvious idea that made the change work.
+A recap tells people what got fixed, what's new, and what got better over a
+stretch of work. Write for someone who wasn't there: lead with what people
+lived through, explain why it happened in plain words, show the result, and
+keep the engineering detail one click away.
 
 1. `npx -y github:2018kguo/prtour recap --author <login>[,<login>…] --since YYYY-MM-DD [--until …] [--repo o/r]`
    writes `recap.json` with every merged PR, plus `context/<number>.md` per PR:
    the description, the largest files, and what the person typed to the agent
-   lane that opened it. Lanes come from local Claude Code and Codex
-   transcripts, named by ptyd when it runs. With hundreds of PRs, distill the
-   context files in parallel batches first, then write.
-2. Group PRs into 4 to 10 `workstreams` by outcome. Order by impact. Small or
-   internal PRs that fit nowhere go in `otherPrs` (one line on what they are),
-   not into a workstream of their own.
-3. Every workstream is one of two kinds, set with `kind`: `"fix"` (a problem
-   people had, now solved) or `"feature"` (a new capability worth showing in a
-   demo). Internal work that is neither goes into `otherPrs`. Fixes render
-   first, then features. A feature uses `symptom` for what you couldn't do
-   before, `now` for what you can do now, and needs `demo`: 1 to 4 steps to
-   show it live (["Open any chat and click Desktop", "Click Take over and log
-   in", "Click Done, continue"]).
-   Lead with the pain. Readers care what broke for people, then what fixed it.
-   For each workstream:
-   - `symptom`: what a user or engineer actually lived through, in their words
-     ("Your chat froze mid-answer for seconds at a time, at random"). No
-     internals. `howBad`: how often or how badly, in human terms, with a sourced
-     number ("1 in 7 busy minutes had a freeze over a second"). `now`: what they
-     get today, in one sentence.
-   - `title`: the fix as an outcome, symptom-forward ("Chats stop freezing while
-     someone else's PDF parses"). `name` (2 to 4 words), `tag`, `whoFeelsIt`,
-     `headline` (the result in one line, for the overview table).
-   - `wins`: 3 to 5 one-line results that lead with the number,
-     `[{"text": "4,000-page OCR document: 65.5 s to 29 ms of blocking", "prs": [11270]}]`.
-   - `designCall`: the one aha, at most 3 sentences, so a smart reader learns
-     something. Extra ones go in `aha`.
-   - One visual that makes the aha obvious: `diagram` (readers toggle
-     Before/After), `mermaid`, `images`, or `compare`.
-   - `steps`: a step-through of the aha, 3 to 5 cards readers click through
-     (it auto-plays): `{"caption", "items": [{"tag": "Before", "title",
-     "body"}]}`. Good for "what happens in order".
-   - `triedFirst`: what was tried and dropped before the fix that shipped,
-     and why. Only when the context says so.
+   lane that opened it (from local Claude Code / Codex transcripts; lane names
+   from ptyd). With hundreds of PRs, distill the context files in parallel
+   batches first, then write.
+2. Group PRs into workstreams, each one of three kinds (`kind`):
+   - `"fix"`: a problem people had, now solved. Leads with `symptom`.
+   - `"feature"`: something new worth showing in a demo. Needs `demo` steps.
+   - `"improvement"`: something that already worked and got measurably
+     faster or better (speed, accuracy, cost). Leads with what was slow or
+     weak.
+   Internal work that is none of these (CI, refactors, evals) goes in the
+   one-line `otherPrs`. Check coverage: every user-visible change should land
+   in a workstream.
+3. Each workstream, top to bottom (this is the order readers see):
+   - `title`: the outcome, in plain words.
+   - `symptom` and `howBad`: what people saw, and how often or how badly,
+     with a sourced number. `now`: what they get today.
+   - `explain`: why it happened, for a smart non-engineer. Name the concept
+     once and say what it means ("Node runs every chat on one thread; a long
+     CPU task on that thread stops every chat on it until it finishes").
+   - One or two visuals, never more:
+     - `timeline`: the clearest way to show contention or waiting. Rows over
+       a few seconds, Before and After, with a play button:
+       `{"caption", "length": 10, "unit": "seconds", "rows": ["Main thread",
+       "Your chat", "PDF thread"], "before": [{"row": 0, "from": 0, "to": 9.4,
+       "kind": "busy", "label": "Parse another chat's PDF"}, {"row": 1, "from":
+       0, "to": 9.4, "kind": "frozen", "label": "No words"}], "after": […]}`.
+       Kinds: busy, stream, frozen, wait.
+     - `chart`: real measurements over time, with hover readouts and marks
+       for deploys: `{"title", "caption", "unit": "%", "points": [{"x":
+       "2026-11-03T08", "label": "8am", "y": 13.8, "note": "max freeze 2.3 s",
+       "hi": true}], "marks": [{"x": "2026-11-03T18", "label": "#11256
+       deployed"}]}`.
+     - `diagram` (Before/After map), `mermaid`, `steps`, `images`.
+   - `wins`: 3 to 5 one-line results that lead with the number, each with
+     its `prs`.
+   - `diffs`: at most two targeted snippets of the code that carries the
+     idea, each `{"pr", "file", "lines": [from, to], "caption"}` (new-file line
+     numbers; a few lines, not a whole file). The caption says what to look at.
+   - `designCall`: the idea that made it work, in two or three sentences.
+     `triedFirst` when the context says what was tried and dropped.
+   - `details`: the engineering notes, folded by default:
+     `[{"title", "body", "prs", "results"}]`. One readable item per change.
+     Don't put PR lists in titles; cite PRs in `prs` or inline as `#12345`.
    - `asked`: what the person set out to do, paraphrased from the lane context.
-   - Everything dense is folded under "Engineering details": `before` (the
-     technical cause), `results` tables, `proof`, `sections`, `trade`. Keep it
-     there; don't repeat it above.
-   Write `#12345` anywhere in prose and it links to the PR.
-4. Top of the report: `title`, `summary` (two or three sentences, opening with
-   what people were living with), the overview cards are built from each workstream's `symptom`/`now` (fixes) and `title`/`now`/`demo` (features), so write those well; `metrics` (optional "By the numbers" strip, `{"before": "504", "after":
-   "321", "unit": "MB", "label": "idle chat-worker heap, from a zod upgrade"}`
-   or `{"value", "label"}`), and `dayNotes` (`{"2026-10-28": "chat memory, OCR
-   second reader"}`). Name agent lanes in `lanes` (`{"claude 3873de98": "Chat
-   memory lane"}`). Give every PR a `oneLiner`.
-5. Every number must come from a PR description or context file. Never
-   estimate. The writing rules above apply, and `npx -y github:2018kguo/prtour check`
-   enforces them. Then `render` (HTML), `--format pdf`, `--format md`, or `show`.
+4. Top of the report: `title`, `byline`, and a `summary` of two or three
+   sentences that opens with what people were living with. The overview lists
+   are built from each workstream's `symptom`/`title` and `now`, so write
+   those well. Add `dayNotes` and readable `lanes` names.
+5. Every number comes from a PR, a context file or measured evidence. Never
+   estimate. The writing rules above apply, and `check` enforces them, plus the
+   limits on visuals and diffs per workstream. Then `render` (HTML),
+   `--format pdf`, `--format md`, or `show`.
+
+The page follows common critiques of generated design, so don't fight it:
+one type family, no labels above headings, no icon tiles or colored card
+borders, no identical card grids, no metric strips, nothing smaller than 14px.
 
 ## tour.json
 

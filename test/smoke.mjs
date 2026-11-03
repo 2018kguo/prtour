@@ -106,10 +106,10 @@ fs.writeFileSync(path.join(rd, 'recap.json'), JSON.stringify({ kind: 'recap', ti
 assert.match(run('check', rd), /3 PRs, 2 workstreams, 3 days with merges/);
 const rhtml = fs.readFileSync(run('render', rd).trim(), 'utf8');
 assert.match(rhtml, /<svg class="chart"/);
-assert.match(rhtml, /PRs merged per day/);
+assert.match(rhtml, /When it shipped/);
 assert.match(rhtml, /id="ws-2"/);
 assert.match(rhtml, /class="dg-wrap" data-view="after"/);
-assert.doesNotMatch(rhtml, /diffs-container/);
-assert.match(run('render', rd, '--format', 'md'), /\| Faster reads \|  \| 2 \|/);
-assert.match(run('show', rd, '--no-color'), /━━ 1 · Faster reads/);
+assert.doesNotMatch(rhtml, /<diffs-container/);
+assert.match(run('render', rd, '--format', 'md'), /\*\*Faster reads\*\*\n\n- Before: Pages took seconds to open\./);
+assert.match(run('show', rd, '--no-color'), /\n  Faster reads\n/);
 console.log('smoke ok');

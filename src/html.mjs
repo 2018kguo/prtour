@@ -234,3 +234,10 @@ $('#fb-copy').onclick=()=>navigator.clipboard.writeText('Review feedback ('+id+'
 $('#fb-clear').onclick=()=>{if(confirm('Clear all comments?')){S.comments=[];save();bar();if(live)fetch('/feedback',{method:'DELETE'})}};bar();
 if(live){const es=new EventSource('/events');es.onmessage=()=>location.reload()}
 })();`;
+
+// For other pages (recaps) that embed a few diff snippets: render one, then
+// append sharedTail(state) once, after the last snippet.
+export const snippetState = () => ({ shared: [], tokens: new Map() });
+export const snippetHTML = (file, hunks, state) => diffHTML(file, hunks, [], state);
+export const sharedTail = (o) => `<template id="pierre-shared">${o.shared.map((x, i) => `<template data-i="${i}">${x}</template>`).join('')}</template>
+<style id="pierre-tokens" media="not all">${[...o.tokens].map(([css, k]) => `.${k}{${css}}`).join('')}</style><script>${ADOPT}</script>`;
