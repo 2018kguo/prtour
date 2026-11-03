@@ -52,8 +52,8 @@ assert.match(run('check', t), /review 3\/8 lines/);
 
 const html = fs.readFileSync(run('render', t).trim(), 'utf8');
 assert.match(html, /shadowrootmode="open"/);
-assert.match(html, /<div slot="annotation-additions-3"><div class="note" id="note-1"/);
-assert.match(html, /<span class="note-n" title="1\/1">1<\/span><div class="note-body"><b>The check<\/b>/);
+assert.match(html, /<div slot="annotation-additions-3"><div class="callout note" id="note-1"/);
+assert.match(html, /<span class="num" title="1\/1">1<\/span><div class="callout-body"><b>The check<\/b>/);
 assert.match(html, /The rest of files shown in part/);
 assert.match(run('render', t, '--format', 'md'), /> \*\*1\/1\*\* `src\/cache.ts:3`/);
 const term = run('show', t, '--no-color');
@@ -94,6 +94,6 @@ stour.notes = [{ file: 'p2:src/cache.ts', line: 3, body: 'second part' }];
 fs.writeFileSync(path.join(st, 'tour.json'), JSON.stringify(stour));
 assert.match(run('check', st), /0 partial; review 8\/12 lines/);
 const shtml = fs.readFileSync(run('render', st).trim(), 'utf8');
-assert.match(shtml, /<span slot="header-prefix" class="part">#p2<\/span>/);
+assert.match(shtml, /<span slot="header-prefix" style="margin-right:6px"><span class="badge" data-variant="outline">#p2<\/span><\/span>/);
 assert.match(run('render', st, '--format', 'md'), /`#p2 src\/cache.ts:3`/);
 console.log('smoke ok');

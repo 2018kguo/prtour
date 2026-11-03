@@ -3,12 +3,34 @@
   "version": "0.1.0",
   "description": "Guided, agent-annotated PR reviews: chapters, numbered notes, noise hidden. One self-contained HTML file, Markdown, or terminal. Diffs by @pierre/diffs.",
   "type": "module",
-  "bin": { "prtour": "bin/prtour.mjs" },
-  "files": ["bin", "src", "SKILL.md", "README.md", "LICENSE"],
-  "scripts": { "test": "node src/patch.mjs && node src/style.mjs && node src/diagram.mjs && node src/term-images.mjs && node src/tour.mjs && node test/smoke.mjs" },
-  "engines": { "node": ">=20" },
-  "keywords": ["code-review", "diff", "pull-request", "agents", "claude", "codex"],
+  "bin": {
+    "prtour": "bin/prtour.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "SKILL.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node src/patch.mjs && node src/style.mjs && node src/diagram.mjs && node src/term-images.mjs && node src/tour.mjs && node test/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "code-review",
+    "diff",
+    "pull-request",
+    "agents",
+    "claude",
+    "codex"
+  ],
   "repository": "github:2018kguo/prtour",
   "license": "MIT",
-  "dependencies": { "@pierre/diffs": "1.6.2" }
+  "dependencies": {
+    "@pierre/diffs": "1.6.2",
+    "basecoat-css": "1.1.0"
+  }
 }
