@@ -5,6 +5,8 @@ chapters by idea, with numbered notes on the lines that matter. Tests,
 generated files and helper noise are hidden but still listed. A 2,000-line PR
 becomes the 400 lines a maintainer actually needs to read.
 
+![A guided review: chapter with numbered agent notes inline](docs/note.png)
+
 One `tour.json` renders three ways:
 
 - **HTML**: one self-contained file. Diffs are pre-rendered with
@@ -58,6 +60,8 @@ The agent:
      `prtour render --format md` (post it).
 
 ## What the page does
+
+![Overview: summary, flow and reading order](docs/overview.png)
 
 - Overview: the summary, the flow of the change, the reading order of notes,
   and what was left out and why.

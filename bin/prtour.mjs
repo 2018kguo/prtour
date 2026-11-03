@@ -94,7 +94,7 @@ function fetchDiff(target) {
   if (target && fs.existsSync(target) && fs.statSync(target).isFile()) return { diff: fs.readFileSync(target, 'utf8'), slug: path.basename(target).replace(/\.\w+$/, ''), meta: { title: path.basename(target) } };
   if (target && (/^\d+$/.test(target) || /\/pull\/\d+/.test(target) || /^[\w.-]+\/[\w.-]+#\d+$/.test(target))) return fetchPR(target);
   const git = (args) => sh('git', ['diff', '--no-color', '--no-ext-diff', ...args]);
-  if (target) return { diff: git([target]), slug: target.replace(/[^\w.-]+/g, '_'), meta: { title: `git diff ${target}`, base: target.split(/\.{2,3}/)[0], head: target.split(/\.{2,3}/)[1] || 'working tree' } };
+  if (target) return { diff: git([target]), slug: target.replace(/[^\w-]+/g, '_'), meta: { title: `git diff ${target}`, base: target.split(/\.{2,3}/)[0], head: target.split(/\.{2,3}/)[1] || 'working tree' } };
   // No target: this branch (committed + uncommitted) against the default branch.
   const head = sh('git', ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   const def = trySh('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])?.trim() || (trySh('git', ['rev-parse', '--verify', '-q', 'origin/main']) ? 'origin/main' : 'main');

@@ -42,6 +42,7 @@ export function globToRegExp(glob) {
 export function resolve(tour, files) {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const placed = new Set();
+  const taken = new Map();
   const label = (key) => { const f = byPath.get(key); return f?.part ? `#${f.part} ${f.name}` : key; };
   const warnings = [];
   const chapters = (tour.chapters ?? []).map((c, ci) => ({
@@ -51,12 +52,20 @@ export function resolve(tour, files) {
       const { path, hunks } = typeof spec === 'string' ? { path: spec } : spec;
       const matches = byPath.has(path) ? [path] : files.map((f) => f.path).filter((p) => globToRegExp(path).test(p));
       if (!matches.length) warnings.push(`chapter "${c.title}": ${path} is not in the diff`);
-      return matches.filter((p) => !placed.has(p) && placed.add(p)).map((p) => {
+      return matches.flatMap((p) => {
+        // A file may be split across chapters by hunk; each hunk shows once.
         const file = byPath.get(p);
-        const shown = hunks ?? file.hunks.map((_, i) => i);
-        const bad = shown.filter((i) => !file.hunks[i]);
+        const t = taken.get(p) ?? new Set();
+        const bad = (hunks ?? []).filter((i) => !file.hunks[i]);
         if (bad.length) warnings.push(`${p}: hunk index ${bad.join(',')} out of range (file has ${file.hunks.length})`);
-        return { file, hunks: hunks ? shown.filter((i) => file.hunks[i]) : null };
+        const want = hunks ? hunks.filter((i) => file.hunks[i]) : file.hunks.map((_, i) => i);
+        const free = want.filter((i) => !t.has(i));
+        if (hunks && free.length < want.length) warnings.push(`${p}: hunk(s) ${want.filter((i) => t.has(i)).join(',')} already shown in an earlier chapter`);
+        if (file.hunks.length ? !free.length : placed.has(p)) return [];
+        free.forEach((i) => t.add(i));
+        taken.set(p, t);
+        placed.add(p);
+        return [{ file, hunks: free.length === file.hunks.length ? null : free }];
       });
     }),
   }));
@@ -74,23 +83,24 @@ export function resolve(tour, files) {
   }
 
   // Partially shown files: the rest of their hunks are hidden, and said so.
-  const partial = chapters.flatMap((c) => c.entries).filter((e) => e.hunks)
-    .map((e) => ({ file: e.file, hunks: e.file.hunks.map((_, i) => i).filter((i) => !e.hunks.includes(i)) }))
+  const partial = [...taken].map(([p, t]) => ({ file: byPath.get(p), hunks: byPath.get(p).hunks.map((_, i) => i).filter((i) => !t.has(i)) }))
     .filter((p) => p.hunks.length);
 
   // Notes in array order are the reading order: "3/11".
-  const entryOf = new Map(chapters.flatMap((c, ci) => c.entries.map((e) => [e.file.path, { e, ci }])));
+  const entriesOf = new Map();
+  chapters.forEach((c, ci) => c.entries.forEach((e) => entriesOf.set(e.file.path, [...(entriesOf.get(e.file.path) ?? []), { e, ci }])));
+  const shownHunks = (e) => (e.hunks ?? e.file.hunks.map((_, j) => j)).map((j) => e.file.hunks[j]);
   const notes = (tour.notes ?? []).map((n, i) => {
     const side = n.side === 'old' || n.side === 'deletions' ? 'deletions' : 'additions';
-    const hit = entryOf.get(n.file);
-    let anchored = false;
+    const hits = entriesOf.get(n.file) ?? [];
+    const inLine = (x) => n.line != null && shownHunks(x.e).some((h) => (side === 'additions' ? h.newLines : h.oldLines).has(n.line));
+    const hit = hits.find(inLine) ?? hits[0];
+    const anchored = !!hit && inLine(hit);
     if (!hit) warnings.push(`note ${i + 1}: ${n.file} is not shown in any chapter`);
     else if (n.line != null) {
-      const hs = (hit.e.hunks ?? hit.e.file.hunks.map((_, j) => j)).map((j) => hit.e.file.hunks[j]);
-      anchored = hs.some((h) => (side === 'additions' ? h.newLines : h.oldLines).has(n.line));
       if (!anchored) warnings.push(`note ${i + 1}: ${n.file}:${n.line} (${side === 'additions' ? 'new' : 'old'} side) is not in a shown hunk; shown at file top`);
     }
-    return { ...n, n: i + 1, side, anchored, chapter: hit?.ci ?? null, title: n.title ?? '', body: n.body ?? '', where: `${label(n.file)}${n.line != null ? `:${n.line}` : ''}` };
+    return { ...n, n: i + 1, side, anchored, chapter: hit?.ci ?? null, entry: hit?.e ?? null, title: n.title ?? '', body: n.body ?? '', where: `${label(n.file)}${n.line != null ? `:${n.line}` : ''}` };
   });
   notes.forEach((n) => { n.label = `${n.n}/${notes.length}`; });
   notes.forEach((n, i) => {
@@ -127,5 +137,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   assert.deepEqual(r.notes.map((n) => [n.label, n.anchored]), [['1/2', true], ['2/2', false]]);
   assert.equal(r.warnings.length, 2);
   assert.deepEqual([r.stats.total, r.stats.shown], [10, 6]);
+  const split = resolve({ chapters: [{ files: [{ path: 'src/a.ts', hunks: [1] }] }, { files: ['src/a.ts', 'src/b.ts'] }], hidden: [{ files: ['**'] }], notes: [{ file: 'src/a.ts', line: 1 }] }, files);
+  assert.deepEqual(split.chapters.map((c) => c.entries.map((e) => [e.file.path, e.hunks])), [[['src/a.ts', [1]]], [['src/a.ts', [0]], ['src/b.ts', null]]]);
+  assert.deepEqual([split.partial.length, split.notes[0].chapter, split.notes[0].anchored, split.warnings], [0, 1, true, []]);
   console.log('tour.mjs ok');
 }

@@ -55,7 +55,7 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
     out.push('', cyan(bold(`━━ ${String(ci + 1).padStart(2, '0')}/${String(r.chapters.length).padStart(2, '0')} ${ch.title} `.padEnd(width, '━'))));
     if (ch.body) out.push(fmt(ch.body));
     for (const e of ch.entries) {
-      const ns = r.notes.filter((n) => n.file === e.file.path);
+      const ns = r.notes.filter((n) => n.entry === e);
       out.push('', bold(`  ${r.label(e.file.path)}`) + dim(` ${e.file.status}`) + (e.hunks ? dim(` (partial: ${e.hunks.length}/${e.file.hunks.length} hunks)`) : ''));
       for (const n of ns.filter((x) => !x.anchored)) out.push(...box(n));
       if (e.file.binary) { out.push(dim('      (binary)')); continue; }

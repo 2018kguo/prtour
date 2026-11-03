@@ -70,21 +70,22 @@ export async function renderHTML(r, opts = {}) {
   const t = r.tour;
   const s = r.stats;
   const pct = s.total ? Math.round((s.shown / s.total) * 100) : 100;
-  const notesFor = (path) => r.notes.filter((n) => n.file === path);
+  const notesFor = (e) => r.notes.filter((n) => n.entry === e);
+  const eid = (ci, e) => `${fileId(e.file.path)}-${ci + 1}`;
 
   const chapters = [];
   for (const [ci, c] of r.chapters.entries()) {
     const files = [];
     for (const e of c.entries) {
-      const ns = notesFor(e.file.path);
+      const ns = notesFor(e);
       const loose = ns.filter((n) => !n.anchored).map(noteHTML).join('');
       const hiddenHunks = e.hunks ? e.file.hunks.length - e.hunks.length : 0;
-      files.push(`<section class="file" id="${fileId(e.file.path)}">${loose}${await diffHTML(e.file, e.hunks, ns, o)}${hiddenHunks ? `<a class="muted small" href="#hidden">${hiddenHunks} more hunk(s) of this file are hidden</a>` : ''}</section>`);
+      files.push(`<section class="file" id="${eid(ci, e)}">${loose}${await diffHTML(e.file, e.hunks, ns, o)}${hiddenHunks ? `<a class="muted small" href="#hidden">${hiddenHunks} more hunk(s) of this file are hidden</a>` : ''}</section>`);
     }
     chapters.push(`<section class="chapter" id="ch-${ci + 1}" data-chapter="${ci + 1}">
 <header class="ch-head"><div class="ch-num">${String(ci + 1).padStart(2, '0')} / ${String(r.chapters.length).padStart(2, '0')} <label class="rev"><input type="checkbox" data-reviewed="${ci + 1}"> Reviewed</label> <button class="reply" data-reply-chapter="${ci + 1}">Comment</button></div>
 <h2>${esc(c.title)}</h2>${md(c.body)}
-<ul class="files">${c.entries.map((e) => `<li><a href="#${fileId(e.file.path)}">${esc(r.label(e.file.path))}</a> ${counts(...hunkCounts(e.file, e.hunks ?? e.file.hunks.map((_, i) => i)))}${e.hunks ? ' <span class="muted">(partial)</span>' : ''}</li>`).join('')}</ul></header>${files.join('')}</section>`);
+<ul class="files">${c.entries.map((e) => `<li><a href="#${eid(ci, e)}">${esc(r.label(e.file.path))}</a> ${counts(...hunkCounts(e.file, e.hunks ?? e.file.hunks.map((_, i) => i)))}${e.hunks ? ' <span class="muted">(partial)</span>' : ''}</li>`).join('')}</ul></header>${files.join('')}</section>`);
   }
 
   const hidden = [];

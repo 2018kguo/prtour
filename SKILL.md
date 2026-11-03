@@ -38,7 +38,9 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
 3. **Write `tour.json`** (schema below). Order chapters by idea, not by directory:
    data shapes first, then the flow through the algorithms, and supporting
    changes last. If one file mixes core and boilerplate, list only its core hunks
-   with `{"path": "...", "hunks": [0, 3]}`.
+   with `{"path": "...", "hunks": [0, 3]}`. One file can be split across
+   chapters this way, and each hunk shows only once. A later plain or glob
+   entry for the same file takes the hunks that are left.
    `npx prtour hunks <path-substring> --lines` prints each hunk's index and
    line range, and every line with its old and new line numbers. Use it to
    pick hunks and to anchor notes; don't count lines by hand.
