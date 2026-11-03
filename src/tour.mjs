@@ -1,5 +1,6 @@
 import { lint, stripCode } from './style.mjs';
 import { sliceHunk } from './patch.mjs';
+import { checkDiagram } from './diagram.mjs';
 
 // tour.json: scaffold it from a diff, then resolve it against the diff into
 // exactly what each renderer shows (chapters, numbered notes, hidden files).
@@ -53,6 +54,7 @@ export function resolve(tour, files) {
   const chapters = (tour.chapters ?? []).map((c, ci) => ({
     title: c.title || `Chapter ${ci + 1}`,
     body: c.body ?? c.explanation ?? '',
+    visual: { diagram: c.diagram, mermaid: c.mermaid, images: c.images ?? [] },
     entries: (c.files ?? []).flatMap((spec) => {
       const { path, hunks, lines } = typeof spec === 'string' ? { path: spec } : spec;
       const matches = byPath.has(path) ? [path] : files.map((f) => f.path).filter((p) => globToRegExp(path).test(p));
@@ -134,12 +136,16 @@ export function resolve(tour, files) {
     shown > BUDGET.lines && `${shown} lines shown (budget ${BUDGET.lines})`,
   ].filter(Boolean);
   if (over.length && !tour.allowLarge) warnings.push(`too much to review: ${over.join(', ')}. Hide what follows from the decisions, or set "allowLarge": "<why this PR needs it>"`);
+  const nCh = (tour.chapters ?? []).length;
+  warnings.push(...checkDiagram(tour.diagram, nCh), ...(tour.chapters ?? []).flatMap((c, i) => checkDiagram(c.diagram, nCh).map((w) => `chapter ${i + 1} ${w}`)));
   const texts = [
     ['summary', [tour.summary ?? ''].flat().join('\n\n'), 500],
     ...(tour.steps ?? []).map((x, i) => [`step ${i + 1}`, x, 160]),
     ...(tour.chapters ?? []).flatMap((c, i) => [[`chapter ${i + 1} title`, c.title, 80], [`chapter ${i + 1} body`, c.body ?? c.explanation, 280]]),
     ...notes.flatMap((n) => [[`note ${n.n} title`, n.title, 70], [`note ${n.n}`, n.body, 320]]),
     ['skipped', tour.skipped, 300],
+    ...[tour.diagram, ...(tour.chapters ?? []).map((c) => c.diagram)].filter(Boolean).flatMap((d) => [['diagram caption', d.caption, 120], ...(d.edges ?? []).map((e) => ['diagram edge label', e.label, 24])]),
+    ...[...(tour.images ?? []), ...(tour.chapters ?? []).flatMap((c) => c.images ?? [])].map((im) => ['image caption', im.caption, 160]),
   ];
   for (const [where, text, max] of texts) {
     for (const hit of lint(text)) warnings.push(`writing, ${where}: ${hit}`);

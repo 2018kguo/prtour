@@ -8,6 +8,7 @@ import { splitPatch } from '../src/patch.mjs';
 import { kindOf, resolve, scaffold } from '../src/tour.mjs';
 import { renderHTML } from '../src/html.mjs';
 import { renderMarkdown, renderTerminal } from '../src/text.mjs';
+import { detect } from '../src/term-images.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -23,6 +24,7 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
            --format md|term  Markdown (PR comment) or terminal output to stdout
            -o <file>         output path   --split  side-by-side   --wrap  wrap lines
   prtour show [dir]          the tour in the terminal (ANSI, paged)
+           --images kitty|iterm|none   inline images; default probes the terminal
   prtour open [dir]          serve with live reload; reviewer comments -> feedback.json
   prtour feedback [dir]      print reviewer comments as Markdown (--clear to reset)
   prtour skill [--install]   print the agent skill (or write .claude/skills/prtour/SKILL.md)
@@ -42,7 +44,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-o' || a === '--out') flags.out = argv[++i];
-    else if (a === '--format' || a === '--port' || a === '--dir') flags[a.slice(2)] = argv[++i];
+    else if (a === '--format' || a === '--port' || a === '--dir' || a === '--images') flags[a.slice(2)] = argv[++i];
     else if (a === '-h') flags.help = true;
     else if (a.startsWith('--')) flags[a.slice(2)] = true;
     else pos.push(a);
@@ -68,7 +70,16 @@ function load(dir) {
   const files = tour.parts
     ? tour.parts.flatMap((p) => splitPatch(fs.readFileSync(path.join(dir, 'parts', `${p.key}.patch`), 'utf8'), p.key))
     : splitPatch(fs.readFileSync(path.join(dir, 'diff.patch'), 'utf8'));
-  return resolve(tour, files);
+  const r = resolve(tour, files);
+  // Image paths are relative to the tour folder; check them here, where the folder is known.
+  for (const im of [...(tour.images ?? []), ...(tour.chapters ?? []).flatMap((c) => c.images ?? [])]) {
+    if (!im?.src) { r.warnings.push('image without src'); continue; }
+    if (/^https?:/.test(im.src)) continue;
+    im.abs = path.resolve(dir, im.src);
+    if (!fs.existsSync(im.abs)) r.warnings.push(`image ${im.src} not found (paths are relative to ${rel(dir)})`);
+    else if (fs.statSync(im.abs).size > 8e6) r.warnings.push(`image ${im.src} is ${(fs.statSync(im.abs).size / 1e6).toFixed(1)} MB; it is embedded in the HTML, so keep it under 8 MB`);
+  }
+  return r;
 }
 
 // ---- fetching a diff ------------------------------------------------------
@@ -178,9 +189,11 @@ async function render(dir, flags) {
   console.log(out);
 }
 
-function show(dir, flags) {
-  const text = renderTerminal(load(dir), { color: !flags['no-color'], width: Math.min(process.stdout.columns || 100, 120) });
-  if (!process.stdout.isTTY) return process.stdout.write(text);
+async function show(dir, flags) {
+  const images = await detect(flags.images ?? (flags['no-images'] ? 'none' : 'auto'));
+  const text = renderTerminal(load(dir), { color: !flags['no-color'], width: Math.min(process.stdout.columns || 100, 120), images });
+  // A pager would mangle image escapes, so pages with images print straight through.
+  if (!process.stdout.isTTY || images) return process.stdout.write(text);
   const less = spawn('less', ['-RFX'], { stdio: ['pipe', 'inherit', 'inherit'] });
   less.on('error', () => process.stdout.write(text));
   less.stdin.end(text);

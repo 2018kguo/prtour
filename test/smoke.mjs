@@ -53,11 +53,30 @@ assert.match(run('check', t), /review 3\/8 lines/);
 const html = fs.readFileSync(run('render', t).trim(), 'utf8');
 assert.match(html, /shadowrootmode="open"/);
 assert.match(html, /<div slot="annotation-additions-3"><div class="note" id="note-1"/);
-assert.match(html, /1\/1<\/span><b>The check/);
-assert.match(html, /Hidden hunks of shown files/);
+assert.match(html, /<span class="note-n" title="1\/1">1<\/span><div class="note-body"><b>The check<\/b>/);
+assert.match(html, /The rest of files shown in part/);
 assert.match(run('render', t, '--format', 'md'), /> \*\*1\/1\*\* `src\/cache.ts:3`/);
 const term = run('show', t, '--no-color');
 assert.match(term, /\s3 \+  return hit && !hit\.expired\(\) \? hit : null;\n\s+┃ 1\/1 The check/);
+
+// Visuals: a diagram (SVG, mermaid, tree), an embedded image, and a mermaid block.
+fs.writeFileSync(path.join(t, 'shot.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+const vt = JSON.parse(fs.readFileSync(path.join(t, 'tour.json'), 'utf8'));
+vt.diagram = { nodes: [{ id: 'r', label: 'read' }, { id: 'c', label: 'expired()', change: 'new', chapter: 1 }], edges: [{ from: 'r', to: 'c' }] };
+vt.chapters[0].images = [{ src: 'shot.png', caption: 'The cache panel after' }];
+vt.chapters[0].mermaid = 'sequenceDiagram\n  A->>B: get';
+fs.writeFileSync(path.join(t, 'tour.json'), JSON.stringify(vt));
+const vhtml = fs.readFileSync(run('render', t).trim(), 'utf8');
+assert.match(vhtml, /<svg class="dg"[\s\S]*<a href="#ch-1"/);
+assert.match(vhtml, /<img src="data:image\/png;base64,iVBOR/);
+assert.match(vhtml, /<pre class="mermaid">sequenceDiagram/);
+assert.match(run('render', t, '--format', 'md'), /```mermaid\nflowchart LR[\s\S]*```mermaid\nsequenceDiagram/);
+assert.match(run('show', t, '--no-color', '--images', 'none'), /read\n\s+└─▶ \+ expired\(\) \(01\)/);
+vt.chapters[0].images = [{ src: 'missing.png' }];
+fs.writeFileSync(path.join(t, 'tour.json'), JSON.stringify(vt));
+assert.throws(() => run('check', t), (e) => /image missing.png not found/.test(e.stdout));
+vt.chapters[0].images = [];
+fs.writeFileSync(path.join(t, 'tour.json'), JSON.stringify(vt));
 
 // A note on a hidden hunk is a warning, and check fails.
 const tour = JSON.parse(fs.readFileSync(path.join(t, 'tour.json'), 'utf8'));

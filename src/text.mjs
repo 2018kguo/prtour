@@ -1,9 +1,23 @@
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { diagramMermaid, diagramTree, diagramSVGStandalone } from './diagram.mjs';
+import { imageEscape, svgToPng } from './term-images.mjs';
+
 // Resolved tour -> Markdown (PR comment, Slack, chat) or ANSI terminal output.
 
 const hunkList = (e) => (e.hunks ?? e.file.hunks.map((_, i) => i)).map((i) => e.file.hunks[i]);
 const loc = (n) => n.where;
 // "lines 40-62, 90-97" (new side) for a partially shown file
 const ranges = (f, hs) => hs.map((i) => { const h = f.hunks[i]; const end = h.newStart + Math.max(0, h.newLines.size - 1); return h.newLines.size ? `${h.newStart}-${end}` : `old ${h.oldStart}`; }).join(', ');
+
+// GitHub renders mermaid; local images can't be attached to a comment, so they are named.
+function mdVisuals(v = {}) {
+  const out = [];
+  if (v.diagram?.nodes?.length) out.push(...(v.diagram.caption ? [`*${v.diagram.caption}*`, ''] : []), diagramMermaid(v.diagram), '');
+  if (v.mermaid) out.push('```mermaid', v.mermaid.trim(), '```', '');
+  for (const im of v.images ?? []) out.push(/^https?:/.test(im.src) ? `![${im.caption ?? ''}](${im.src})` : `*Image: ${im.caption ?? im.src} (in the HTML review)*`, '');
+  return out;
+}
 
 export function renderMarkdown(r, { link } = {}) {
   const t = r.tour;
@@ -12,10 +26,12 @@ export function renderMarkdown(r, { link } = {}) {
   out.push(`Review **${s.shown}** of ${s.total} changed lines across ${r.chapters.reduce((n, c) => n + c.entries.length, 0)} of ${s.files} files · ${r.notes.length} notes${link ? ` · [open the guided review](${link})` : ''}`, '');
   if (t.summary) out.push([t.summary].flat().join('\n\n'), '');
   if (t.steps?.length) out.push(...t.steps.map((x, i) => `${i + 1}. ${x}`), '');
+  out.push(...mdVisuals({ diagram: t.diagram, mermaid: t.mermaid, images: t.images }));
   if (r.parts.length) out.push('**Stack**', '', ...r.parts.map((p) => `- ${p.url ? `[#${p.key}](${p.url})` : `#${p.key}`} ${p.title ?? ''} (+${p.additions} −${p.deletions}, ${p.files} files)`), '');
   r.chapters.forEach((c, ci) => {
     out.push(`### ${ci + 1}. ${c.title}`, '');
     if (c.body) out.push(c.body, '');
+    out.push(...mdVisuals(c.visual));
     for (const e of c.entries) out.push(`- \`${r.label(e.file.path)}\`${e.hunks ? ` (lines ${ranges(e.file, e.hunks)})` : ''}`);
     const ns = r.notes.filter((n) => n.chapter === ci);
     if (ns.length) out.push('', ...ns.flatMap((n, i) => [...(i ? ['>'] : []), `> **${n.label}** \`${loc(n)}\`${n.title ? ` **${n.title}**` : ''}: ${n.body.replace(/\n+/g, ' ')}`]));
@@ -31,7 +47,7 @@ export function renderMarkdown(r, { link } = {}) {
   return `${out.join('\n').trim()}\n`;
 }
 
-export function renderTerminal(r, { color = true, width = 100 } = {}) {
+export function renderTerminal(r, { color = true, width = 100, images = null } = {}) {
   const c = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : String(s));
   const [bold, dim, green, red, cyan, yellow] = [c(1), c(2), c(32), c(31), c(36), c(33)];
   // inline markdown -> ANSI: **bold** and `code`
@@ -44,6 +60,22 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
   out.push(`Review ${bold(s.shown)} of ${s.total} changed lines · ${r.notes.length} notes · ${green(`+${s.additions}`)} ${red(`-${s.deletions}`)}`);
   if (t.summary) out.push('', fmt([t.summary].flat().join('\n\n')));
   if (t.steps?.length) out.push('', ...t.steps.map((x, i) => `  ${i + 1}. ${fmt(x)}`));
+  const visuals = (v = {}) => {
+    const res = [];
+    if (v.diagram?.nodes?.length) {
+      const png = images ? svgToPng(diagramSVGStandalone(v.diagram)) : null;
+      res.push('', bold(v.diagram.title ?? 'Before / after') + (v.diagram.caption ? dim(`  ${v.diagram.caption}`) : ''));
+      if (png) res.push(imageEscape(images, png, { cols: Math.min(width, 100) }));
+      else res.push(...diagramTree(v.diagram, { add: green, dim, chg: yellow }).map((l) => `  ${l}`));
+    }
+    if (v.mermaid) res.push('', dim('  mermaid (renders in the HTML and on GitHub):'), ...v.mermaid.trim().split('\n').map((l) => dim(`    ${l}`)));
+    for (const im of v.images ?? []) {
+      const png = images && im.abs && fs.existsSync(im.abs) ? toPng(im.abs, images) : null;
+      res.push('', png ? imageEscape(images, png, { cols: Math.min(width, 100) }) + dim(`  ${im.caption ?? ''}`) : dim(`  [image] ${im.caption ?? ''} ${im.src}`));
+    }
+    return res;
+  };
+  out.push(...visuals({ diagram: t.diagram, mermaid: t.mermaid, images: t.images }));
   if (r.parts.length) out.push('', bold('Stack'), ...r.parts.map((p) => `  ${cyan(`#${p.key}`)} ${p.title ?? ''} ${dim(`${p.files} files`)} ${green(`+${p.additions}`)} ${red(`-${p.deletions}`)}`));
   for (const w of r.warnings) out.push(yellow(`! ${w}`));
   const box = (n) => {
@@ -54,6 +86,7 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
   r.chapters.forEach((ch, ci) => {
     out.push('', cyan(bold(`━━ ${String(ci + 1).padStart(2, '0')}/${String(r.chapters.length).padStart(2, '0')} ${ch.title} `.padEnd(width, '━'))));
     if (ch.body) out.push(fmt(ch.body));
+    out.push(...visuals(ch.visual));
     for (const e of ch.entries) {
       const ns = r.notes.filter((n) => n.entry === e);
       out.push('', bold(`  ${r.label(e.file.path)}`) + dim(` ${e.file.status}`) + (e.hunks ? dim(` (partial: ${e.hunks.length}/${e.file.hunks.length} hunks)`) : ''));
@@ -82,4 +115,15 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
     if (t.skipped) out.push(dim(`  ${fmt(t.skipped)}`));
   }
   return `${out.join('\n')}\n`;
+}
+
+// kitty only takes PNG; iTerm2 takes anything macOS can decode.
+function toPng(file, proto) {
+  const buf = fs.readFileSync(file);
+  if (proto === 'iterm' || /\.png$/i.test(file)) return buf;
+  if (/\.svg$/i.test(file)) return svgToPng(buf.toString('utf8'));
+  for (const [cmd, args] of [['sips', ['-s', 'format', 'png', file, '--out', '/dev/stdout']], ['magick', [file, 'png:-']]]) {
+    try { return execFileSync(cmd, args, { maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); } catch {}
+  }
+  return null;
 }
