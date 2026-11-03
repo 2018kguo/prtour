@@ -1,7 +1,9 @@
 // Resolved tour -> Markdown (PR comment, Slack, chat) or ANSI terminal output.
 
 const hunkList = (e) => (e.hunks ?? e.file.hunks.map((_, i) => i)).map((i) => e.file.hunks[i]);
-const loc = (n) => `${n.file}${n.line != null ? `:${n.line}` : ''}`;
+const loc = (n) => n.where;
+// "lines 40-62, 90-97" (new side) for a partially shown file
+const ranges = (f, hs) => hs.map((i) => { const h = f.hunks[i]; const end = h.newStart + Math.max(0, h.newLines.size - 1); return h.newLines.size ? `${h.newStart}-${end}` : `old ${h.oldStart}`; }).join(', ');
 
 export function renderMarkdown(r, { link } = {}) {
   const t = r.tour;
@@ -10,18 +12,19 @@ export function renderMarkdown(r, { link } = {}) {
   out.push(`Review **${s.shown}** of ${s.total} changed lines across ${r.chapters.reduce((n, c) => n + c.entries.length, 0)} of ${s.files} files · ${r.notes.length} notes${link ? ` · [open the guided review](${link})` : ''}`, '');
   if (t.summary) out.push([t.summary].flat().join('\n\n'), '');
   if (t.steps?.length) out.push(...t.steps.map((x, i) => `${i + 1}. ${x}`), '');
+  if (r.parts.length) out.push('**Stack**', '', ...r.parts.map((p) => `- ${p.url ? `[#${p.key}](${p.url})` : `#${p.key}`} ${p.title ?? ''} (+${p.additions} −${p.deletions}, ${p.files} files)`), '');
   r.chapters.forEach((c, ci) => {
     out.push(`### ${ci + 1}. ${c.title}`, '');
     if (c.body) out.push(c.body, '');
-    for (const e of c.entries) out.push(`- \`${e.file.path}\`${e.hunks ? ` (hunk${e.hunks.length > 1 ? 's' : ''} ${e.hunks.join(', ')} of ${e.file.hunks.length})` : ''}`);
+    for (const e of c.entries) out.push(`- \`${r.label(e.file.path)}\`${e.hunks ? ` (lines ${ranges(e.file, e.hunks)})` : ''}`);
     const ns = r.notes.filter((n) => n.chapter === ci);
     if (ns.length) out.push('', ...ns.flatMap((n, i) => [...(i ? ['>'] : []), `> **${n.label}** \`${loc(n)}\`${n.title ? ` **${n.title}**` : ''}: ${n.body.replace(/\n+/g, ' ')}`]));
     out.push('');
   });
   if (r.hidden.length || r.partial.length) {
     out.push('<details><summary>Not in review</summary>', '');
-    for (const h of r.hidden) out.push(`**${h.reason}**: ${h.files.map((f) => `\`${f.path}\``).join(', ')}`, '');
-    if (r.partial.length) out.push(`**Hidden hunks**: ${r.partial.map((p) => `\`${p.file.path}\` (${p.hunks.join(', ')})`).join(', ')}`, '');
+    for (const h of r.hidden) out.push(`**${h.reason}**: ${h.files.map((f) => `\`${r.label(f.path)}\``).join(', ')}`, '');
+    if (r.partial.length) out.push(`**Hidden hunks**: ${r.partial.map((p) => `\`${r.label(p.file.path)}\` (lines ${ranges(p.file, p.hunks)})`).join(', ')}`, '');
     if (t.skipped) out.push(t.skipped, '');
     out.push('</details>');
   }
@@ -41,6 +44,7 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
   out.push(`Review ${bold(s.shown)} of ${s.total} changed lines · ${r.notes.length} notes · ${green(`+${s.additions}`)} ${red(`-${s.deletions}`)}`);
   if (t.summary) out.push('', fmt([t.summary].flat().join('\n\n')));
   if (t.steps?.length) out.push('', ...t.steps.map((x, i) => `  ${i + 1}. ${fmt(x)}`));
+  if (r.parts.length) out.push('', bold('Stack'), ...r.parts.map((p) => `  ${cyan(`#${p.key}`)} ${p.title ?? ''} ${dim(`${p.files} files`)} ${green(`+${p.additions}`)} ${red(`-${p.deletions}`)}`));
   for (const w of r.warnings) out.push(yellow(`! ${w}`));
   const box = (n) => {
     const text = `${n.label} ${n.title ? `${n.title}: ` : ''}${n.body}`.replace(/\s+/g, ' ');
@@ -52,7 +56,7 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
     if (ch.body) out.push(fmt(ch.body));
     for (const e of ch.entries) {
       const ns = r.notes.filter((n) => n.file === e.file.path);
-      out.push('', bold(`  ${e.file.path}`) + dim(` ${e.file.status}`) + (e.hunks ? dim(` (partial: ${e.hunks.length}/${e.file.hunks.length} hunks)`) : ''));
+      out.push('', bold(`  ${r.label(e.file.path)}`) + dim(` ${e.file.status}`) + (e.hunks ? dim(` (partial: ${e.hunks.length}/${e.file.hunks.length} hunks)`) : ''));
       for (const n of ns.filter((x) => !x.anchored)) out.push(...box(n));
       if (e.file.binary) { out.push(dim('      (binary)')); continue; }
       for (const h of hunkList(e)) {
@@ -73,8 +77,8 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
   });
   if (r.hidden.length || r.partial.length) {
     out.push('', dim(bold('━━ Not in review '.padEnd(width, '━'))));
-    for (const h of r.hidden) out.push(dim(`  ${h.reason}: ${h.files.map((f) => f.path).join(', ')}`));
-    for (const p of r.partial) out.push(dim(`  ${p.file.path}: hunks ${p.hunks.join(', ')} hidden`));
+    for (const h of r.hidden) out.push(dim(`  ${h.reason}: ${h.files.map((f) => r.label(f.path)).join(', ')}`));
+    for (const p of r.partial) out.push(dim(`  ${r.label(p.file.path)}: hunks ${p.hunks.join(', ')} hidden`));
     if (t.skipped) out.push(dim(`  ${fmt(t.skipped)}`));
   }
   return `${out.join('\n')}\n`;

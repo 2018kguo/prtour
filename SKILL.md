@@ -17,6 +17,14 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
    - It writes `.prtour/<slug>/diff.patch` and `.prtour/<slug>/tour.json`
      (git-ignored), and prints every file with its kind, size and hunk count.
      The scaffold already hides lockfiles, generated files, tests and manifests.
+   - **Stacked or related PRs:** `init 101 102 103` (or `init 103 --stack`,
+     which follows base and head branches to find the whole stack) makes one
+     tour with one part per PR. Each part keeps its own diff against its own
+     base. In `tour.json`, file paths are prefixed with the part key
+     (`"102:src/x.ts"`). That applies everywhere: chapters, notes, `hidden`,
+     and `hunks <substring>` (e.g. `**/*.test.ts` still matches every part).
+     Read a stack bottom-up, PR by PR, unless the change reads better as one
+     idea across PRs. Chapters may mix parts.
    - `--dir <path>` puts the tour somewhere else. This is useful when you must
      not write into the repo. Every later command takes that folder as its
      first argument or as `--dir`. With no folder given, commands use the
@@ -87,5 +95,7 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
   in an "Unsorted" chapter with a warning.
 - Notes on files outside every chapter, or on lines outside the shown hunks,
   get a warning and are shown at the top of the file.
+- `description`, `repo` and `parts` come from `init` and are context for you;
+  only `parts` is rendered (as the Stack list). Leave them in place.
 - Re-running `init` refreshes `diff.patch` and keeps your `tour.json`; add
   `--force` to re-scaffold.

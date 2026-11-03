@@ -25,7 +25,7 @@ export function md(text) {
 
 const OPTS = (o) => ({ theme: { dark: 'pierre-dark', light: 'pierre-light' }, themeType: 'system', diffStyle: o.split ? 'split' : 'unified', overflow: o.wrap ? 'wrap' : 'scroll', unsafeCSS: '[data-column-number]{cursor:pointer}' });
 
-const noteHTML = (n) => `<div class="note" id="note-${n.n}" data-note="${n.n}"><div class="note-head"><span class="badge">${n.label}</span><b>${esc(n.title)}</b><span class="where">${esc(n.file)}${n.line != null ? `:${n.line}` : ''}</span><button class="reply" data-reply="${n.n}">Reply</button></div>${md(n.body)}</div>`;
+const noteHTML = (n) => `<div class="note" id="note-${n.n}" data-note="${n.n}"><div class="note-head"><span class="badge">${n.label}</span><b>${esc(n.title)}</b><span class="where">${esc(n.where)}</span><button class="reply" data-reply="${n.n}">Reply</button></div>${md(n.body)}</div>`;
 
 async function diffHTML(file, hunks, notes, o) {
   if (file.binary || !file.hunks.length) {
@@ -36,7 +36,8 @@ async function diffHTML(file, hunks, notes, o) {
   const { prerenderedHTML } = await preloadPatchDiff({ patch: filePatch(file, hunks), options: OPTS(o), annotations });
   const html = o.shared ? tokenClasses(dedupe(prerenderedHTML, o.shared), o.tokens) : prerenderedHTML;
   const slots = annotations.map((a) => `<div slot="annotation-${a.side}-${a.lineNumber}">${anchored.filter((n) => n.side === a.side && n.line === a.lineNumber).map(noteHTML).join('')}</div>`).join('');
-  return `<diffs-container data-file="${esc(file.path)}"><template shadowrootmode="open">${html}</template>${slots}</diffs-container>`;
+  const tag = file.part ? `<span slot="header-prefix" class="part">#${esc(file.part)}</span>` : '';
+  return `<diffs-container data-file="${esc(file.path)}"><template shadowrootmode="open">${html}</template>${tag}${slots}</diffs-container>`;
 }
 
 // Every shadow root carries the same ~50 KB of core CSS and icon sprite. Keep
@@ -83,18 +84,18 @@ export async function renderHTML(r, opts = {}) {
     chapters.push(`<section class="chapter" id="ch-${ci + 1}" data-chapter="${ci + 1}">
 <header class="ch-head"><div class="ch-num">${String(ci + 1).padStart(2, '0')} / ${String(r.chapters.length).padStart(2, '0')} <label class="rev"><input type="checkbox" data-reviewed="${ci + 1}"> Reviewed</label> <button class="reply" data-reply-chapter="${ci + 1}">Comment</button></div>
 <h2>${esc(c.title)}</h2>${md(c.body)}
-<ul class="files">${c.entries.map((e) => `<li><a href="#${fileId(e.file.path)}">${esc(e.file.path)}</a> ${counts(...hunkCounts(e.file, e.hunks ?? e.file.hunks.map((_, i) => i)))}${e.hunks ? ' <span class="muted">(partial)</span>' : ''}</li>`).join('')}</ul></header>${files.join('')}</section>`);
+<ul class="files">${c.entries.map((e) => `<li><a href="#${fileId(e.file.path)}">${esc(r.label(e.file.path))}</a> ${counts(...hunkCounts(e.file, e.hunks ?? e.file.hunks.map((_, i) => i)))}${e.hunks ? ' <span class="muted">(partial)</span>' : ''}</li>`).join('')}</ul></header>${files.join('')}</section>`);
   }
 
   const hidden = [];
   for (const h of r.hidden) {
     const items = [];
-    for (const f of h.files) items.push(`<details><summary>${esc(f.path)} ${counts(f.additions, f.deletions)}</summary>${await diffHTML(f, null, [], o)}</details>`);
+    for (const f of h.files) items.push(`<details><summary>${esc(r.label(f.path))} ${counts(f.additions, f.deletions)}</summary>${await diffHTML(f, null, [], o)}</details>`);
     hidden.push(`<h3>${esc(h.reason)} <span class="muted">· ${h.files.length} file(s)</span></h3>${items.join('')}`);
   }
   if (r.partial.length) {
     const items = [];
-    for (const p of r.partial) items.push(`<details><summary>${esc(p.file.path)} · ${p.hunks.length} hunk(s) ${counts(...hunkCounts(p.file, p.hunks))}</summary>${await diffHTML(p.file, p.hunks, [], o)}</details>`);
+    for (const p of r.partial) items.push(`<details><summary>${esc(r.label(p.file.path))} · ${p.hunks.length} hunk(s) ${counts(...hunkCounts(p.file, p.hunks))}</summary>${await diffHTML(p.file, p.hunks, [], o)}</details>`);
     hidden.push(`<h3>Hidden hunks of shown files</h3>${items.join('')}`);
   }
 
@@ -116,8 +117,9 @@ ${hidden.length ? '<div class="side-h">Not in review</div><a href="#hidden">Hidd
 <div class="stat"><div class="bar"><i style="width:${pct}%"></i></div>Review <b>${s.shown.toLocaleString()}</b> of ${s.total.toLocaleString()} changed lines (${pct}%) · ${r.chapters.reduce((n, c) => n + c.entries.length, 0)} of ${s.files} files · ${r.notes.length} notes</div>
 ${r.warnings.length && !o.quiet ? `<details class="warn"><summary>${r.warnings.length} tour warning(s)</summary><ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}</header>
 <section id="overview" class="overview"><h2>Overview</h2>${md(t.summary) || '<p class="muted">No summary yet.</p>'}
+${r.parts.length ? `<h3>Stack</h3><ol class="stack">${r.parts.map((p) => `<li><span class="part">#${esc(p.key)}</span> ${p.url ? `<a href="${esc(p.url)}">${esc(p.title ?? '')}</a>` : esc(p.title ?? '')} <span class="muted">${[p.state && p.state.toLowerCase(), (p.base || p.head) && `${esc(p.base ?? '')} ← ${esc(p.head ?? '')}`, `${p.files} files`].filter(Boolean).join(' · ')}</span> ${counts(p.additions, p.deletions)}</li>`).join('')}</ol>` : ''}
 ${t.steps?.length ? `<ol class="steps">${t.steps.map((x) => `<li>${md(x).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ol>` : ''}
-${r.notes.length ? `<h3>Reading order</h3><ol class="order">${r.notes.map((n) => `<li><a href="#note-${n.n}">${esc(n.title || n.body.slice(0, 80))}</a> <span class="muted">${esc(n.file)}${n.line != null ? `:${n.line}` : ''}</span></li>`).join('')}</ol>` : ''}
+${r.notes.length ? `<h3>Reading order</h3><ol class="order">${r.notes.map((n) => `<li><a href="#note-${n.n}">${esc(n.title || n.body.slice(0, 80))}</a> <span class="muted">${esc(n.where)}</span></li>`).join('')}</ol>` : ''}
 ${t.skipped ? `<h3>Left out of review</h3>${md(t.skipped)}` : ''}</section>
 ${chapters.join('\n')}
 ${hidden.length ? `<section id="hidden" class="hidden"><h2>Not in review</h2><p class="muted">These are still in the PR. Open any file to read it anyway.</p>${hidden.join('')}</section>` : ''}
@@ -157,6 +159,8 @@ diffs-container{display:block;border:1px solid var(--line);border-radius:10px;ov
 .note{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter",sans-serif;background:var(--note);border:1px solid var(--note-line);border-radius:8px;padding:8px 12px;margin:8px 10px;color:var(--fg);white-space:normal}
 .file>.note{margin:0 0 8px}.note p{margin:4px 0}.note.focus{outline:2px solid var(--accent)}
 .note-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}.note .where{font:12px ui-monospace,Menlo,monospace;color:var(--muted)}
+.part{font:600 11px ui-monospace,Menlo,monospace;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);border-radius:5px;padding:0 5px;margin-right:6px}
+.stack{padding-left:20px}.stack li{margin:4px 0}
 .badge{font:600 12px ui-monospace,Menlo,monospace;background:var(--fg);color:var(--bg);border-radius:5px;padding:1px 6px}
 button{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:6px;padding:2px 8px;cursor:pointer}
 .note .reply{margin-left:auto}

@@ -1,7 +1,8 @@
 // Split a unified git patch into files and hunks, keeping the raw text so any
 // subset of hunks can be re-rendered at its real line numbers.
 
-export function splitPatch(text) {
+// `part` namespaces paths for multi-PR tours: path "101:src/x.ts", name "src/x.ts".
+export function splitPatch(text, part = null) {
   const files = [];
   const chunks = text.replace(/\r\n/g, '\n').split(/^(?=diff --git )/m).filter((c) => c.startsWith('diff --git '));
   for (const raw of chunks) {
@@ -13,6 +14,9 @@ export function splitPatch(text) {
     const meta = parseHeader(head);
     files.push({
       ...meta,
+      name: meta.path,
+      path: part ? `${part}:${meta.path}` : meta.path,
+      part,
       head,
       hunks,
       binary: /^Binary files /m.test(head) || /^GIT binary patch/m.test(head),
@@ -98,5 +102,7 @@ Binary files /dev/null and b/img.png differ
   assert.deepEqual([f[1].path, f[1].oldPath, f[1].status], ['new.txt', 'old.txt', 'renamed']);
   assert.deepEqual([f[2].path, f[2].status, f[2].binary], ['img.png', 'added', true]);
   assert.ok(filePatch(f[0], [1]).includes('@@ -10,2') && !filePatch(f[0], [1]).includes('@@ -1,3'));
+  const [pf] = splitPatch(p, '101');
+  assert.deepEqual([pf.path, pf.name, pf.part], ['101:x.ts', 'x.ts', '101']);
   console.log('patch.mjs ok');
 }

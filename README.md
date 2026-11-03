@@ -16,6 +16,8 @@ One `tour.json` renders three ways:
 ```sh
 npx prtour 123          # PR in this repo → scaffold → opens in the browser
 npx prtour              # this branch (incl. uncommitted) vs. the default branch
+npx prtour 101 102 103  # several PRs as one tour, one part per PR
+npx prtour 103 --stack  # the whole stack 103 sits in, found via base/head branches
 ```
 
 ## With an agent
@@ -67,13 +69,16 @@ The agent:
   as Markdown.
 - "Not in review" holds every hidden file and hunk, collapsed, so nothing
   skips review by accident.
+- Stacks get a Stack list in the overview, with per-PR stats, and `#101`
+  badges on every file and note. Each PR's diff is against its own base, so
+  the same file changed in two PRs appears once per PR.
 - Light and dark mode follow the system.
 
 ## Commands
 
 ```
-prtour [target]            init + open in the browser
-prtour init [target]       fetch the diff, scaffold .prtour/<slug>/tour.json
+prtour [target…]           init + open in the browser
+prtour init [target…]      fetch the diff, scaffold .prtour/<slug>/tour.json (--stack, --dir)
 prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
 prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
 prtour render [dir]        self-contained HTML (-o file; --format md|term; --split; --wrap)

@@ -14,7 +14,9 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @pierre/diffs
 
   prtour [target]            init + open in the browser (target defaults to this branch)
-  prtour init [target]       fetch the diff, scaffold .prtour/<slug>/tour.json
+  prtour init [target…]      fetch the diff, scaffold .prtour/<slug>/tour.json
+           --stack           with one PR: find its whole stack (base/head chain)
+           --dir <path>      write the tour here instead of .prtour/<slug>
   prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
   prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
   prtour render [dir]        write a self-contained HTML file (default <dir>/index.html)
@@ -26,6 +28,7 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
   prtour skill [--install]   print the agent skill (or write .claude/skills/prtour/SKILL.md)
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
+        several targets = one tour with a part per PR/range (stacked PRs)
 dir:    a .prtour/<slug> folder or slug (positional or --dir); defaults to the newest tour.
         init --dir <path> writes the tour somewhere other than .prtour/<slug>.`;
 
@@ -60,9 +63,11 @@ function findDir(arg) {
 }
 
 function load(dir) {
-  const files = splitPatch(fs.readFileSync(path.join(dir, 'diff.patch'), 'utf8'));
   let tour;
   try { tour = JSON.parse(fs.readFileSync(path.join(dir, 'tour.json'), 'utf8')); } catch (e) { die(`${dir}/tour.json is not valid JSON: ${e.message}`); }
+  const files = tour.parts
+    ? tour.parts.flatMap((p) => splitPatch(fs.readFileSync(path.join(dir, 'parts', `${p.key}.patch`), 'utf8'), p.key))
+    : splitPatch(fs.readFileSync(path.join(dir, 'diff.patch'), 'utf8'));
   return resolve(tour, files);
 }
 
@@ -71,7 +76,7 @@ function load(dir) {
 function fetchPR(target) {
   const m = target.match(/^([\w.-]+\/[\w.-]+)#(\d+)$/);
   const sel = m ? [m[2], '-R', m[1]] : [target];
-  const view = trySh('gh', ['pr', 'view', ...sel, '--json', 'number,title,url,author,baseRefName,headRefName,body']);
+  const view = trySh('gh', ['pr', 'view', ...sel, '--json', 'number,title,url,author,baseRefName,headRefName,body,state']);
   if (!view) die(`could not read PR ${target} with gh (is \`gh auth status\` ok?)`);
   const pr = JSON.parse(view);
   const repo = pr.url.match(/github\.com\/([^/]+\/[^/]+)\/pull/)[1];
@@ -81,7 +86,7 @@ function fetchPR(target) {
     if (!trySh('git', ['fetch', '-q', 'origin', `pull/${pr.number}/head`, pr.baseRefName])) die('GitHub would not return the diff and git fetch failed');
     diff = sh('git', ['diff', '--no-color', '--no-ext-diff', `origin/${pr.baseRefName}...FETCH_HEAD`]);
   }
-  return { diff, slug: `pr-${pr.number}`, meta: { title: pr.title, url: pr.url, number: pr.number, repo, author: pr.author?.login, base: pr.baseRefName, head: pr.headRefName, description: (pr.body ?? '').slice(0, 4000) } };
+  return { diff, slug: `pr-${pr.number}`, meta: { title: pr.title, url: pr.url, number: pr.number, repo, author: pr.author?.login, base: pr.baseRefName, head: pr.headRefName, state: pr.state, description: pr.body ?? '' } };
 }
 
 function fetchDiff(target) {
@@ -98,22 +103,64 @@ function fetchDiff(target) {
   return { diff: git([base]), slug: head === 'HEAD' ? `local-${base.slice(0, 7)}` : head.replace(/[^\w.-]+/g, '_'), meta: { title: head === 'HEAD' ? subject : head, base: def, head } };
 }
 
-function init(target, flags) {
-  const { diff, slug, meta } = fetchDiff(target);
+// The whole stack a PR sits in: follow base branches down to the trunk and
+// head branches up, using the repo's PR list (open, merged and closed).
+function stackOf(target) {
+  const first = fetchPR(target).meta;
+  const list = JSON.parse(sh('gh', ['pr', 'list', '-R', first.repo, '--state', 'all', '--limit', '500', '--json', 'number,headRefName,baseRefName,state']));
+  const pick = (prs) => prs.find((p) => p.state === 'OPEN') ?? prs.find((p) => p.state === 'MERGED') ?? prs[0];
+  const chain = [{ number: first.number, headRefName: first.head, baseRefName: first.base }];
+  for (let p; (p = pick(list.filter((x) => x.headRefName === chain[0].baseRefName && !chain.some((c) => c.number === x.number)))); ) chain.unshift(p);
+  for (let p; (p = pick(list.filter((x) => x.baseRefName === chain.at(-1).headRefName && !chain.some((c) => c.number === x.number)))); ) chain.push(p);
+  return chain.map((p) => `${first.repo}#${p.number}`);
+}
+
+function init(targets, flags) {
+  if (flags.stack) {
+    if (targets.length !== 1) die('--stack takes one PR and finds the rest');
+    targets = stackOf(targets[0]);
+    console.error(`stack: ${targets.join(' → ')}`);
+  }
+  if (targets.length > 1) return initParts(targets, flags);
+  const { diff, slug, meta } = fetchDiff(targets[0]);
   const files = splitPatch(diff);
   if (!files.length) die('the diff is empty');
+  const dir = makeDir(slug, flags);
+  fs.writeFileSync(path.join(dir, 'diff.patch'), diff);
+  return writeTour(dir, files, meta, null, flags);
+}
+
+function makeDir(slug, flags) {
   const dir = flags.dir ? path.resolve(flags.dir) : path.join(workRoot(), slug);
   fs.mkdirSync(dir, { recursive: true });
   const root = path.dirname(dir);
   if (path.basename(root) === '.prtour' && !fs.existsSync(path.join(root, '.gitignore'))) fs.writeFileSync(path.join(root, '.gitignore'), '*\n');
-  fs.writeFileSync(path.join(dir, 'diff.patch'), diff);
+  return dir;
+}
+
+// Several PRs (a stack, or any set) or ranges as one tour. Each part keeps its
+// own diff against its own base; paths become "<key>:<path>".
+function initParts(targets, flags) {
+  const fetched = targets.map(fetchDiff);
+  const parts = fetched.map(({ meta }, i) => ({ key: String(meta.number ?? `p${i + 1}`), title: meta.title, url: meta.url, number: meta.number, author: meta.author, base: meta.base, head: meta.head, state: meta.state, description: meta.description }));
+  const dir = makeDir(`stack-${parts.map((p) => p.key).join('-')}`, flags);
+  fs.mkdirSync(path.join(dir, 'parts'), { recursive: true });
+  fetched.forEach(({ diff }, i) => fs.writeFileSync(path.join(dir, 'parts', `${parts[i].key}.patch`), diff));
+  const files = fetched.flatMap(({ diff }, i) => splitPatch(diff, parts[i].key));
+  if (!files.length) die('the diffs are empty');
+  const m = fetched[0].meta;
+  const meta = { title: `Stack: ${parts.map((p) => `#${p.key}`).join(' → ')}`, repo: m.repo, author: m.author, base: m.base, head: fetched.at(-1).meta.head };
+  return writeTour(dir, files, meta, parts, flags);
+}
+
+function writeTour(dir, files, meta, parts, flags) {
   const tourPath = path.join(dir, 'tour.json');
   if (fs.existsSync(tourPath) && !flags.force) console.error(`kept existing ${tourPath} (--force to re-scaffold); diff refreshed`);
-  else fs.writeFileSync(tourPath, `${JSON.stringify(scaffold(files, meta), null, 2)}\n`);
+  else fs.writeFileSync(tourPath, `${JSON.stringify(scaffold(files, meta, parts), null, 2)}\n`);
   const tot = files.reduce((s, f) => s + f.additions + f.deletions, 0);
   console.log(`${rel(dir)}: ${files.length} files, ${tot} changed lines`);
   console.log(`  ${'kind'.padEnd(9)} ${'+add'.padEnd(6)} ${'-del'.padEnd(6)} hunks path`);
-  for (const f of files) console.log(`  ${kindOf(f.path).padEnd(9)} +${String(f.additions).padEnd(5)} -${String(f.deletions).padEnd(5)} ${String(f.hunks.length).padEnd(5)} ${f.path}`);
+  for (const f of files) console.log(`  ${kindOf(f.name).padEnd(9)} +${String(f.additions).padEnd(5)} -${String(f.deletions).padEnd(5)} ${String(f.hunks.length).padEnd(5)} ${f.path}`);
   console.log(`\nnext: edit ${rel(tourPath)}, then \`prtour check\` and \`prtour render\` (or \`prtour open\`)`);
   return dir;
 }
@@ -142,7 +189,8 @@ function show(dir, flags) {
 function check(dir) {
   const r = load(dir);
   const s = r.stats;
-  console.log(`${r.chapters.length} chapters, ${r.notes.length} notes, ${r.hidden.reduce((n, h) => n + h.files.length, 0)} hidden files, ${r.partial.length} partial; review ${s.shown}/${s.total} lines`);
+  const unsorted = r.chapters.at(-1)?.title === 'Unsorted' && r.warnings.some((w) => w.includes('in no chapter'));
+  console.log(`${r.chapters.length - unsorted} chapters${unsorted ? ' (+ Unsorted)' : ''}, ${r.notes.length} notes, ${r.hidden.reduce((n, h) => n + h.files.length, 0)} hidden files, ${r.partial.length} partial; review ${s.shown}/${s.total} lines`);
   for (const w of r.warnings) console.log(`warning: ${w}`);
   process.exit(r.warnings.length ? 1 : 0);
 }
@@ -234,7 +282,7 @@ function skill(flags) {
 const [cmd, ...rest] = process.argv.slice(2);
 const { flags, pos } = parseArgs(rest);
 const COMMANDS = {
-  init: () => init(pos[0], flags),
+  init: () => init(pos, flags),
   render: () => render(findDir(flags.dir ?? pos[0]), flags),
   show: () => show(findDir(flags.dir ?? pos[0]), flags),
   open: () => serve(findDir(flags.dir ?? pos[0]), flags),
@@ -248,5 +296,5 @@ else if (COMMANDS[cmd]) await COMMANDS[cmd]();
 else {
   // Bare `prtour [target]`: one command from nothing to a review in the browser.
   const all = parseArgs(process.argv.slice(2));
-  await serve(init(all.pos[0], all.flags), all.flags);
+  await serve(init(all.pos, all.flags), all.flags);
 }

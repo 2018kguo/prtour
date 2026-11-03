@@ -64,4 +64,17 @@ const tour = JSON.parse(fs.readFileSync(path.join(t, 'tour.json'), 'utf8'));
 tour.notes.push({ file: 'src/cache.ts', line: 22, body: 'in hunk 1, not shown' });
 fs.writeFileSync(path.join(t, 'tour.json'), JSON.stringify(tour));
 assert.throws(() => run('check', t), (e) => e.status === 1 && /not in a shown hunk/.test(e.stdout));
+// Several targets = one tour with a part per diff; the same path in two parts stays two files.
+fs.writeFileSync(path.join(dir, 'y.patch'), fs.readFileSync(path.join(dir, 'x.patch'), 'utf8').split('diff --git a/src/cache.test.ts')[0]);
+const st = path.join(dir, 'stack');
+run('init', 'x.patch', 'y.patch', '--dir', st);
+const stour = JSON.parse(fs.readFileSync(path.join(st, 'tour.json'), 'utf8'));
+assert.deepEqual(stour.parts.map((p) => p.key), ['p1', 'p2']);
+assert.deepEqual(stour.chapters.map((c) => c.title), ['#p1 Core change', '#p2 Core change']);
+stour.notes = [{ file: 'p2:src/cache.ts', line: 3, body: 'second part' }];
+fs.writeFileSync(path.join(st, 'tour.json'), JSON.stringify(stour));
+assert.match(run('check', st), /0 partial; review 8\/12 lines/);
+const shtml = fs.readFileSync(run('render', st).trim(), 'utf8');
+assert.match(shtml, /<span slot="header-prefix" class="part">#p2<\/span>/);
+assert.match(run('render', st, '--format', 'md'), /`#p2 src\/cache.ts:3`/);
 console.log('smoke ok');

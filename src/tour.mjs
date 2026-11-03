@@ -3,7 +3,7 @@
 
 const KINDS = [
   ['lockfile', /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|bun\.lockb?|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|composer\.lock|flake\.lock|mix\.lock|Package\.resolved)$/],
-  ['generated', /(^|\/)(dist|build|generated|__generated__|gen|vendor)\/|\.(min\.(js|css)|map|snap|pb\.go)$|[./](gen|generated)\.[a-z]+$|_pb2\.pyi?$|(^|\/)meta\/[^/]*_snapshot\.json$|(^|\/)__snapshots__\//],
+  ['generated', /(^|\/)(dist|build|generated|__generated__|gen|vendor)\/|\.(min\.(js|css)|map|snap|pb\.go)$|[./](gen|generated)\.[a-z]+$|_pb2\.pyi?$|(^|\/)meta\/([^/]*_snapshot|_journal)\.json$|(^|\/)__snapshots__\//],
   ['test', /(^|\/)(__tests__|tests?|spec|e2e|fixtures?|testdata)\/|[._-](test|spec)\.[cm]?[jt]sx?$|_test\.(go|py|rs|rb|exs?)$|(^|\/)test_[^/]*\.py$|Tests?\.(swift|kt|java|cs)$/],
   ['migration', /(^|\/)(migrations?|migrate|drizzle|alembic|db\/schema)\/|\.sql$/],
   ['manifest', /(^|\/)(package\.json|Cargo\.toml|pyproject\.toml|go\.mod|Gemfile|requirements[^/]*\.txt|tsconfig[^/]*\.json|\.github\/.*\.ya?ml|Dockerfile|[^/]*\.(toml|ya?ml))$/],
@@ -13,18 +13,19 @@ const HIDE_BY_DEFAULT = { lockfile: 'Lockfiles', generated: 'Generated files and
 
 export const kindOf = (path) => KINDS.find(([, re]) => re.test(path))?.[0] ?? 'code';
 
-export function scaffold(files, meta) {
-  const by = (k) => files.filter((f) => kindOf(f.path) === k).map((f) => f.path);
-  const chapter = (title, body, k) => (by(k).length ? [{ title, body, files: by(k) }] : []);
+export function scaffold(files, meta, parts = null) {
+  const by = (k, part) => files.filter((f) => kindOf(f.name) === k && (part === undefined || f.part === part)).map((f) => f.path);
+  const kinds = [['Core change', 'TODO(agent): split by idea, core first; one chapter = one thing to understand.', 'code'], ['Schema and migrations', '', 'migration'], ['Docs', '', 'docs']];
+  // A stack reads PR by PR, bottom first; within a PR, core before supporting.
+  const chapters = (parts ?? [{ key: undefined }]).flatMap((p) => kinds
+    .filter(([, , k]) => by(k, p.key).length)
+    .map(([title, body, k]) => ({ title: p.key ? `#${p.key} ${title}` : title, body, files: by(k, p.key) })));
   return {
     ...meta,
+    ...(parts ? { parts } : {}),
     summary: '',
     steps: [],
-    chapters: [
-      ...chapter('Core change', 'TODO(agent): split by idea, core first; one chapter = one thing to understand.', 'code'),
-      ...chapter('Schema and migrations', '', 'migration'),
-      ...chapter('Docs', '', 'docs'),
-    ],
+    chapters,
     notes: [],
     hidden: Object.entries(HIDE_BY_DEFAULT).filter(([k]) => by(k).length).map(([k, reason]) => ({ reason, files: by(k) })),
     skipped: '',
@@ -41,6 +42,7 @@ export function globToRegExp(glob) {
 export function resolve(tour, files) {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const placed = new Set();
+  const label = (key) => { const f = byPath.get(key); return f?.part ? `#${f.part} ${f.name}` : key; };
   const warnings = [];
   const chapters = (tour.chapters ?? []).map((c, ci) => ({
     title: c.title || `Chapter ${ci + 1}`,
@@ -88,7 +90,7 @@ export function resolve(tour, files) {
       anchored = hs.some((h) => (side === 'additions' ? h.newLines : h.oldLines).has(n.line));
       if (!anchored) warnings.push(`note ${i + 1}: ${n.file}:${n.line} (${side === 'additions' ? 'new' : 'old'} side) is not in a shown hunk; shown at file top`);
     }
-    return { ...n, n: i + 1, side, anchored, chapter: hit?.ci ?? null, title: n.title ?? '', body: n.body ?? '' };
+    return { ...n, n: i + 1, side, anchored, chapter: hit?.ci ?? null, title: n.title ?? '', body: n.body ?? '', where: `${label(n.file)}${n.line != null ? `:${n.line}` : ''}` };
   });
   notes.forEach((n) => { n.label = `${n.n}/${notes.length}`; });
   notes.forEach((n, i) => {
@@ -99,7 +101,11 @@ export function resolve(tour, files) {
   const count = (f, hs) => (hs ?? f.hunks.map((_, i) => i)).reduce((s, i) => s + (f.hunks[i]?.additions ?? 0) + (f.hunks[i]?.deletions ?? 0), 0);
   const total = files.reduce((s, f) => s + f.additions + f.deletions, 0);
   const shown = chapters.flatMap((c) => c.entries).reduce((s, e) => s + count(e.file, e.hunks), 0);
-  return { tour, files, chapters, hidden, partial, notes, warnings, stats: { files: files.length, total, shown, additions: files.reduce((s, f) => s + f.additions, 0), deletions: files.reduce((s, f) => s + f.deletions, 0) } };
+  const parts = (tour.parts ?? []).map((p) => {
+    const fs = files.filter((f) => f.part === p.key);
+    return { ...p, files: fs.length, additions: fs.reduce((n, f) => n + f.additions, 0), deletions: fs.reduce((n, f) => n + f.deletions, 0) };
+  });
+  return { tour, files, parts, label, chapters, hidden, partial, notes, warnings, stats: { files: files.length, total, shown, additions: files.reduce((s, f) => s + f.additions, 0), deletions: files.reduce((s, f) => s + f.deletions, 0) } };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
