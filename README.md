@@ -17,6 +17,9 @@ One `tour.json` renders three ways:
   screenshots show inline in kitty, Ghostty, WezTerm and iTerm2.
 - **PDF**: `prtour render --format pdf`, through headless Chrome.
 
+Not on npm yet; run it straight from GitHub (`npx -y github:2018kguo/prtour …`)
+or `npm i -g github:2018kguo/prtour` and use `prtour`.
+
 ```sh
 npx prtour 123          # PR in this repo → scaffold → opens in the browser
 npx prtour              # this branch (incl. uncommitted) vs. the default branch
@@ -29,15 +32,15 @@ npx prtour 103 --stack  # the whole stack 103 sits in, found via base/head branc
 The agent instructions ship with the tool:
 
 ```sh
-npx -y prtour@latest skill             # print them (pipe into any agent)
-npx -y prtour@latest skill --install   # write .claude/skills/prtour/SKILL.md
+npx -y github:2018kguo/prtour skill             # print them (pipe into any agent)
+npx -y github:2018kguo/prtour skill --install   # write .claude/skills/prtour/SKILL.md
 ```
 
 Or add one line to `AGENTS.md` / `CLAUDE.md`. This works for cloud agents too,
 since all they need is `npx`:
 
 ```md
-For a guided review of a diff, run `npx -y prtour@latest skill` and follow it.
+For a guided review of a diff, run `npx -y github:2018kguo/prtour skill` and follow it.
 ```
 
 Then ask: *"open this PR in prtour"*, *"make a guided review of #123 and attach
