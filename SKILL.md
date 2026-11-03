@@ -54,7 +54,11 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
 3. **Write `tour.json`** (schema below). Order chapters by decision, not by
    directory. To show part of a file, list its hunks with
    `{"path": "...", "hunks": [0, 3]}`. One file can be split across chapters
-   this way, and each hunk shows only once.
+   this way, and each hunk shows only once. When one hunk is too big (a new
+   file is a single hunk), show just the lines that matter with
+   `{"path": "...", "lines": [[120, 160], [300, 310]]}` (new-file line
+   numbers). The rest of a partly shown file goes to "Not in review" on its
+   own, so you don't need to list it under `hidden`.
    `npx prtour hunks <path-substring> --lines` prints each hunk's index and
    line range, and every line with its old and new line numbers. Use it to
    pick hunks and to anchor notes; don't count lines by hand.
@@ -135,9 +139,11 @@ and reports each hit with a fix.
 }
 ```
 
-- `files` and `hidden.files` take exact paths or globs (`*`, `**`). A file can be
-  in only one place, and the first match wins. Any file you don't place shows up
-  in an "Unsorted" chapter with a warning.
+- `files` and `hidden.files` take exact paths or globs (`*`, `**`). Chapters
+  are matched first. A file shown in any chapter (even partly) is never listed
+  as hidden, so a broad `hidden` glob such as `"**"` is a safe way to hide
+  everything you didn't show. Any file you leave out of both shows up in an
+  "Unsorted" chapter with a warning.
 - Notes on files outside every chapter, or on lines outside the shown hunks,
   get a warning and are shown at the top of the file.
 - `allowLarge` (optional) is shown on the page as the reason the tour is over

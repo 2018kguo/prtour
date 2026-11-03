@@ -80,7 +80,7 @@ export async function renderHTML(r, opts = {}) {
       const ns = notesFor(e);
       const loose = ns.filter((n) => !n.anchored).map(noteHTML).join('');
       const hiddenHunks = e.hunks ? e.file.hunks.length - e.hunks.length : 0;
-      files.push(`<section class="file" id="${eid(ci, e)}">${loose}${await diffHTML(e.file, e.hunks, ns, o)}${hiddenHunks ? `<a class="muted small" href="#hidden">${hiddenHunks} more hunk(s) of this file are hidden</a>` : ''}</section>`);
+      files.push(`<section class="file" id="${eid(ci, e)}">${loose}${await diffHTML(e.file, e.hunks, ns, o)}${hiddenHunks ? `<a class="muted small" href="#hidden">${hiddenHunks} more hunk(s) of this file are hidden</a>` : e.cut ? '<a class="muted small" href="#hidden">Only these lines are shown; the full diff of this file is under Not in review</a>' : ''}</section>`);
     }
     chapters.push(`<section class="chapter" id="ch-${ci + 1}" data-chapter="${ci + 1}">
 <header class="ch-head"><div class="ch-num">${String(ci + 1).padStart(2, '0')} / ${String(r.chapters.length).padStart(2, '0')} <label class="rev"><input type="checkbox" data-reviewed="${ci + 1}"> Reviewed</label> <button class="reply" data-reply-chapter="${ci + 1}">Comment</button></div>

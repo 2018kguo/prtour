@@ -1,4 +1,5 @@
 import { lint, stripCode } from './style.mjs';
+import { sliceHunk } from './patch.mjs';
 
 // tour.json: scaffold it from a diff, then resolve it against the diff into
 // exactly what each renderer shows (chapters, numbered notes, hidden files).
@@ -46,19 +47,30 @@ export function resolve(tour, files) {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const placed = new Set();
   const taken = new Map();
+  const cutFrom = new Set(); // files shown by line range: their whole hunks stay readable under hidden
   const label = (key) => { const f = byPath.get(key); return f?.part ? `#${f.part} ${f.name}` : key; };
   const warnings = [];
   const chapters = (tour.chapters ?? []).map((c, ci) => ({
     title: c.title || `Chapter ${ci + 1}`,
     body: c.body ?? c.explanation ?? '',
     entries: (c.files ?? []).flatMap((spec) => {
-      const { path, hunks } = typeof spec === 'string' ? { path: spec } : spec;
+      const { path, hunks, lines } = typeof spec === 'string' ? { path: spec } : spec;
       const matches = byPath.has(path) ? [path] : files.map((f) => f.path).filter((p) => globToRegExp(path).test(p));
       if (!matches.length) warnings.push(`chapter "${c.title}": ${path} is not in the diff`);
       return matches.flatMap((p) => {
         // A file may be split across chapters by hunk; each hunk shows once.
         const file = byPath.get(p);
         const t = taken.get(p) ?? new Set();
+        if (lines) {
+          // Only these new-side line ranges, cut out of whatever hunks hold them.
+          const ranges = (Array.isArray(lines[0]) ? lines : [lines]).map(([a, b]) => [a, b ?? a]);
+          const cut = ranges.flatMap(([a, b]) => file.hunks.flatMap((h, i) => { const x = sliceHunk(h, a, b); if (x) t.add(i); return x ? [x] : []; }));
+          if (!cut.length) { warnings.push(`${p}: lines ${JSON.stringify(lines)} are not in the diff`); return []; }
+          taken.set(p, t);
+          placed.add(p);
+          cutFrom.add(p);
+          return [{ file: { ...file, hunks: cut }, hunks: null, cut: true }];
+        }
         const bad = (hunks ?? []).filter((i) => !file.hunks[i]);
         if (bad.length) warnings.push(`${p}: hunk index ${bad.join(',')} out of range (file has ${file.hunks.length})`);
         const want = hunks ? hunks.filter((i) => file.hunks[i]) : file.hunks.map((_, i) => i);
@@ -86,7 +98,7 @@ export function resolve(tour, files) {
   }
 
   // Partially shown files: the rest of their hunks are hidden, and said so.
-  const partial = [...taken].map(([p, t]) => ({ file: byPath.get(p), hunks: byPath.get(p).hunks.map((_, i) => i).filter((i) => !t.has(i)) }))
+  const partial = [...taken].map(([p, t]) => ({ file: byPath.get(p), hunks: byPath.get(p).hunks.map((_, i) => i).filter((i) => cutFrom.has(p) || !t.has(i)) }))
     .filter((p) => p.hunks.length);
 
   // Notes in array order are the reading order: "3/11".
@@ -162,6 +174,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   assert.deepEqual([r.stats.total, r.stats.shown], [10, 6]);
   const split = resolve({ chapters: [{ files: [{ path: 'src/a.ts', hunks: [1] }] }, { files: ['src/a.ts', 'src/b.ts'] }], hidden: [{ files: ['**'] }], notes: [{ file: 'src/a.ts', line: 1 }] }, files);
   assert.deepEqual(split.chapters.map((c) => c.entries.map((e) => [e.file.path, e.hunks])), [[['src/a.ts', [1]]], [['src/a.ts', [0]], ['src/b.ts', null]]]);
+  const cut = resolve({ chapters: [{ files: [{ path: 'src/a.ts', lines: [11, 11] }] }], hidden: [{ files: ['**'] }], notes: [{ file: 'src/a.ts', line: 11 }, { file: 'src/a.ts', line: 1 }] }, files);
+  assert.deepEqual([cut.stats.shown, cut.notes.map((n) => n.anchored), cut.partial.map((p) => p.hunks)], [2, [true, false], [[0, 1]]]);
   assert.deepEqual([split.partial.length, split.notes[0].chapter, split.notes[0].anchored, split.warnings], [0, 1, true, []]);
   console.log('tour.mjs ok');
 }
