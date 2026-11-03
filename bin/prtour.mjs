@@ -26,7 +26,8 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
   prtour skill [--install]   print the agent skill (or write .claude/skills/prtour/SKILL.md)
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
-dir:    a .prtour/<slug> folder or slug; defaults to the most recently changed tour`;
+dir:    a .prtour/<slug> folder or slug (positional or --dir); defaults to the newest tour.
+        init --dir <path> writes the tour somewhere other than .prtour/<slug>.`;
 
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 30, stdio: ['pipe', 'pipe', 'pipe'], ...opts });
 const trySh = (...a) => { try { return sh(...a); } catch { return null; } };
@@ -39,6 +40,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '-o' || a === '--out') flags.out = argv[++i];
     else if (a === '--format' || a === '--port' || a === '--dir') flags[a.slice(2)] = argv[++i];
+    else if (a === '-h') flags.help = true;
     else if (a.startsWith('--')) flags[a.slice(2)] = true;
     else pos.push(a);
   }
@@ -110,7 +112,8 @@ function init(target, flags) {
   else fs.writeFileSync(tourPath, `${JSON.stringify(scaffold(files, meta), null, 2)}\n`);
   const tot = files.reduce((s, f) => s + f.additions + f.deletions, 0);
   console.log(`${rel(dir)}: ${files.length} files, ${tot} changed lines`);
-  for (const f of files) console.log(`  ${kindOf(f.path).padEnd(9)} +${String(f.additions).padEnd(5)} -${String(f.deletions).padEnd(5)} ${f.hunks.length}h ${f.path}`);
+  console.log(`  ${'kind'.padEnd(9)} ${'+add'.padEnd(6)} ${'-del'.padEnd(6)} hunks path`);
+  for (const f of files) console.log(`  ${kindOf(f.path).padEnd(9)} +${String(f.additions).padEnd(5)} -${String(f.deletions).padEnd(5)} ${String(f.hunks.length).padEnd(5)} ${f.path}`);
   console.log(`\nnext: edit ${rel(tourPath)}, then \`prtour check\` and \`prtour render\` (or \`prtour open\`)`);
   return dir;
 }
@@ -149,7 +152,7 @@ function hunks(dir, only, flags) {
     if (only.length && !only.some((p) => f.path.includes(p))) continue;
     console.log(`${f.path}  (${f.status}, +${f.additions} -${f.deletions})`);
     f.hunks.forEach((h, i) => {
-      console.log(`  [${i}] ${h.header.replace(/@@(.*)$/, '@@')} +${h.additions} -${h.deletions}  ${h.context}`);
+      console.log(`  [${i}] old ${h.oldStart}-${h.oldStart + Math.max(0, h.oldLines.size - 1)}  new ${h.newStart}-${h.newStart + Math.max(0, h.newLines.size - 1)}  +${h.additions} -${h.deletions}  ${h.context}`);
       if (!flags.lines) return;
       // old/new line numbers, so notes can be anchored without counting by hand
       let o = h.oldStart;
@@ -232,15 +235,15 @@ const [cmd, ...rest] = process.argv.slice(2);
 const { flags, pos } = parseArgs(rest);
 const COMMANDS = {
   init: () => init(pos[0], flags),
-  render: () => render(findDir(pos[0]), flags),
-  show: () => show(findDir(pos[0]), flags),
-  open: () => serve(findDir(pos[0]), flags),
-  check: () => check(findDir(pos[0])),
+  render: () => render(findDir(flags.dir ?? pos[0]), flags),
+  show: () => show(findDir(flags.dir ?? pos[0]), flags),
+  open: () => serve(findDir(flags.dir ?? pos[0]), flags),
+  check: () => check(findDir(flags.dir ?? pos[0])),
   hunks: () => hunks(findDir(flags.dir), pos, flags),
-  feedback: () => feedback(findDir(pos[0]), flags),
+  feedback: () => feedback(findDir(flags.dir ?? pos[0]), flags),
   skill: () => skill(flags),
 };
-if (cmd === '-h' || cmd === '--help' || cmd === 'help') console.log(HELP);
+if (cmd === '-h' || cmd === '--help' || cmd === 'help' || flags.help || flags.h) console.log(HELP);
 else if (COMMANDS[cmd]) await COMMANDS[cmd]();
 else {
   // Bare `prtour [target]`: one command from nothing to a review in the browser.

@@ -16,7 +16,11 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
      changes against the default branch).
    - It writes `.prtour/<slug>/diff.patch` and `.prtour/<slug>/tour.json`
      (git-ignored), and prints every file with its kind, size and hunk count.
-     The scaffold already hides lockfiles, generated files and tests.
+     The scaffold already hides lockfiles, generated files, tests and manifests.
+   - `--dir <path>` puts the tour somewhere else. This is useful when you must
+     not write into the repo. Every later command takes that folder as its
+     first argument or as `--dir`. With no folder given, commands use the
+     newest tour under `.prtour/`.
 2. **Read the diff** (`.prtour/<slug>/diff.patch`) and decide what a careful
    maintainer must review. **Show** core data layouts, non-trivial algorithms,
    control flow, public APIs, schema changes, security and money paths. **Hide**
@@ -26,10 +30,12 @@ renders it. Run it with `npx -y prtour@latest <command>` (no install needed).
 3. **Write `tour.json`** (schema below). Order chapters by idea, not by directory:
    data shapes first, then the flow through the algorithms, and supporting
    changes last. If one file mixes core and boilerplate, list only its core hunks
-   with `{"path": "...", "hunks": [0, 3]}`. Get the indices from
-   `npx prtour hunks <path-substring>`.
+   with `{"path": "...", "hunks": [0, 3]}`.
+   `npx prtour hunks <path-substring> --lines` prints each hunk's index and
+   line range, and every line with its old and new line numbers. Use it to
+   pick hunks and to anchor notes; don't count lines by hand.
 4. **Annotate.** Add one note per stop in `notes`, in reading order (they are
-   numbered `1/N`, `2/N`, …). Anchor each note to a line that is in a shown
+   numbered `1/N`, `2/N`, …, so put them in chapter order). Anchor each note to a line that is in a shown
    hunk: `line` is the new-file line number, or the old one with
    `"side": "old"` for a deleted line. Say why the code is shaped this way,
    what could break, and what to check. Don't restate the code.

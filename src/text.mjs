@@ -13,7 +13,7 @@ export function renderMarkdown(r, { link } = {}) {
   r.chapters.forEach((c, ci) => {
     out.push(`### ${ci + 1}. ${c.title}`, '');
     if (c.body) out.push(c.body, '');
-    for (const e of c.entries) out.push(`- \`${e.file.path}\`${e.hunks ? ` (hunks ${e.hunks.join(', ')})` : ''}`);
+    for (const e of c.entries) out.push(`- \`${e.file.path}\`${e.hunks ? ` (hunk${e.hunks.length > 1 ? 's' : ''} ${e.hunks.join(', ')} of ${e.file.hunks.length})` : ''}`);
     const ns = r.notes.filter((n) => n.chapter === ci);
     if (ns.length) out.push('', ...ns.flatMap((n, i) => [...(i ? ['>'] : []), `> **${n.label}** \`${loc(n)}\`${n.title ? ` **${n.title}**` : ''}: ${n.body.replace(/\n+/g, ' ')}`]));
     out.push('');
@@ -21,7 +21,7 @@ export function renderMarkdown(r, { link } = {}) {
   if (r.hidden.length || r.partial.length) {
     out.push('<details><summary>Not in review</summary>', '');
     for (const h of r.hidden) out.push(`**${h.reason}**: ${h.files.map((f) => `\`${f.path}\``).join(', ')}`, '');
-    if (r.partial.length) out.push(`**Hidden hunks**: ${r.partial.map((p) => `\`${p.file.path}\` (${p.hunks.length})`).join(', ')}`, '');
+    if (r.partial.length) out.push(`**Hidden hunks**: ${r.partial.map((p) => `\`${p.file.path}\` (${p.hunks.join(', ')})`).join(', ')}`, '');
     if (t.skipped) out.push(t.skipped, '');
     out.push('</details>');
   }
@@ -31,23 +31,25 @@ export function renderMarkdown(r, { link } = {}) {
 export function renderTerminal(r, { color = true, width = 100 } = {}) {
   const c = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : String(s));
   const [bold, dim, green, red, cyan, yellow] = [c(1), c(2), c(32), c(31), c(36), c(33)];
+  // inline markdown -> ANSI: **bold** and `code`
+  const fmt = (x) => String(x ?? '').replace(/\*\*([^*]+)\*\*/g, (_, m) => bold(m)).replace(/`([^`]+)`/g, (_, m) => cyan(m));
   const out = [];
   const t = r.tour;
   const s = r.stats;
   out.push(bold(t.title || 'Guided review'));
   out.push(dim([t.number && `#${t.number}`, t.author, t.url].filter(Boolean).join(' · ')));
   out.push(`Review ${bold(s.shown)} of ${s.total} changed lines · ${r.notes.length} notes · ${green(`+${s.additions}`)} ${red(`-${s.deletions}`)}`);
-  if (t.summary) out.push('', [t.summary].flat().join('\n\n'));
-  if (t.steps?.length) out.push('', ...t.steps.map((x, i) => `  ${i + 1}. ${x}`));
+  if (t.summary) out.push('', fmt([t.summary].flat().join('\n\n')));
+  if (t.steps?.length) out.push('', ...t.steps.map((x, i) => `  ${i + 1}. ${fmt(x)}`));
   for (const w of r.warnings) out.push(yellow(`! ${w}`));
   const box = (n) => {
     const text = `${n.label} ${n.title ? `${n.title}: ` : ''}${n.body}`.replace(/\s+/g, ' ');
     const lines = text.match(new RegExp(`.{1,${width - 8}}(\\s|$)`, 'g')) ?? [text];
-    return lines.map((l, i) => yellow(`      ${i ? '│' : '┃'} `) + (i ? l.trim() : bold(l.trim())));
+    return lines.map((l, i) => yellow(`      ${i ? '│' : '┃'} `) + fmt(l.trim()));
   };
   r.chapters.forEach((ch, ci) => {
     out.push('', cyan(bold(`━━ ${String(ci + 1).padStart(2, '0')}/${String(r.chapters.length).padStart(2, '0')} ${ch.title} `.padEnd(width, '━'))));
-    if (ch.body) out.push(ch.body);
+    if (ch.body) out.push(fmt(ch.body));
     for (const e of ch.entries) {
       const ns = r.notes.filter((n) => n.file === e.file.path);
       out.push('', bold(`  ${e.file.path}`) + dim(` ${e.file.status}`) + (e.hunks ? dim(` (partial: ${e.hunks.length}/${e.file.hunks.length} hunks)`) : ''));
@@ -72,8 +74,8 @@ export function renderTerminal(r, { color = true, width = 100 } = {}) {
   if (r.hidden.length || r.partial.length) {
     out.push('', dim(bold('━━ Not in review '.padEnd(width, '━'))));
     for (const h of r.hidden) out.push(dim(`  ${h.reason}: ${h.files.map((f) => f.path).join(', ')}`));
-    for (const p of r.partial) out.push(dim(`  ${p.file.path}: ${p.hunks.length} hunk(s) hidden`));
-    if (t.skipped) out.push(dim(`  ${t.skipped}`));
+    for (const p of r.partial) out.push(dim(`  ${p.file.path}: hunks ${p.hunks.join(', ')} hidden`));
+    if (t.skipped) out.push(dim(`  ${fmt(t.skipped)}`));
   }
   return `${out.join('\n')}\n`;
 }

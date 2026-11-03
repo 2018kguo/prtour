@@ -34,7 +34,7 @@ async function diffHTML(file, hunks, notes, o) {
   const anchored = notes.filter((n) => n.anchored);
   const annotations = [...new Map(anchored.map((n) => [`${n.side}-${n.line}`, { side: n.side, lineNumber: n.line }])).values()];
   const { prerenderedHTML } = await preloadPatchDiff({ patch: filePatch(file, hunks), options: OPTS(o), annotations });
-  const html = o.shared ? dedupe(prerenderedHTML, o.shared) : prerenderedHTML;
+  const html = o.shared ? tokenClasses(dedupe(prerenderedHTML, o.shared), o.tokens) : prerenderedHTML;
   const slots = annotations.map((a) => `<div slot="annotation-${a.side}-${a.lineNumber}">${anchored.filter((n) => n.side === a.side && n.line === a.lineNumber).map(noteHTML).join('')}</div>`).join('');
   return `<diffs-container data-file="${esc(file.path)}"><template shadowrootmode="open">${html}</template>${slots}</diffs-container>`;
 }
@@ -51,12 +51,21 @@ function dedupe(html, shared) {
   }, html);
 }
 
+// Syntax spans repeat ~45 distinct inline styles thousands of times (about half
+// the file). Swap each for a short class backed by one shared sheet.
+function tokenClasses(html, tokens) {
+  return html.replace(/<span style="(--diffs-token[^"]*)">/g, (_, css) => {
+    if (!tokens.has(css)) tokens.set(css, `k${tokens.size}`);
+    return `<span class="${tokens.get(css)}">`;
+  });
+}
+
 const fileId = (p) => `f-${p.replace(/[^a-zA-Z0-9]+/g, '-')}`;
 const counts = (a, d) => `<span class="add">+${a}</span> <span class="del">−${d}</span>`;
 const hunkCounts = (f, hs) => hs.reduce(([a, d], i) => [a + f.hunks[i].additions, d + f.hunks[i].deletions], [0, 0]);
 
 export async function renderHTML(r, opts = {}) {
-  const o = { ...opts, shared: [] };
+  const o = { ...opts, shared: [], tokens: new Map() };
   const t = r.tour;
   const s = r.stats;
   const pct = s.total ? Math.round((s.shown / s.total) * 100) : 100;
@@ -117,6 +126,7 @@ ${hidden.length ? `<section id="hidden" class="hidden"><h2>Not in review</h2><p 
 <aside id="fb" hidden><div class="fb-head"><b id="fb-title"></b><button id="fb-x" aria-label="Close">×</button></div><textarea id="fb-text" rows="4" placeholder="Comment for the author / agent…"></textarea><div class="fb-row"><button id="fb-save">Save comment</button></div></aside>
 <div id="fb-bar" hidden><span id="fb-count"></span><button id="fb-copy">Copy feedback</button><button id="fb-clear">Clear</button></div>
 <template id="pierre-shared">${o.shared.map((x, i) => `<template data-i="${i}">${x}</template>`).join('')}</template>
+<style id="pierre-tokens" media="not all">${[...o.tokens].map(([css, k]) => `.${k}{${css}}`).join('')}</style>
 <script>${ADOPT}</script><script>${CLIENT}</script></body></html>`;
 }
 
@@ -161,7 +171,8 @@ footer{margin-top:60px}[hidden]{display:none!important}
 
 // Put the shared block back into each shadow root: CSS as one adopted sheet, the sprite cloned.
 const ADOPT = `(()=>{const src=document.getElementById('pierre-shared').content,parts=[...src.querySelectorAll('template')].map(t=>t.content),sheets={};
-document.querySelectorAll('diffs-container').forEach(h=>{const root=h.shadowRoot;if(!root)return;root.querySelectorAll('template[data-shared]').forEach(ph=>{const i=ph.dataset.shared,el=parts[i].firstElementChild;
+const tok=new CSSStyleSheet();tok.replaceSync(document.getElementById('pierre-tokens').textContent);
+document.querySelectorAll('diffs-container').forEach(h=>{const root=h.shadowRoot;if(!root)return;root.adoptedStyleSheets=[...root.adoptedStyleSheets,tok];root.querySelectorAll('template[data-shared]').forEach(ph=>{const i=ph.dataset.shared,el=parts[i].firstElementChild;
 if(el.tagName==='STYLE'){if(!sheets[i]){sheets[i]=new CSSStyleSheet();sheets[i].replaceSync(el.textContent)}root.adoptedStyleSheets=[...root.adoptedStyleSheets,sheets[i]];ph.remove()}else ph.replaceWith(el.cloneNode(true))})})})();`;
 
 // Client: reviewed checkboxes, j/k note navigation, comments on lines/notes/

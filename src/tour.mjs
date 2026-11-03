@@ -3,13 +3,13 @@
 
 const KINDS = [
   ['lockfile', /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|bun\.lockb?|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|composer\.lock|flake\.lock|mix\.lock|Package\.resolved)$/],
-  ['generated', /(^|\/)(dist|build|generated|__generated__|gen|vendor)\/|\.(min\.(js|css)|map|snap|pb\.go)$|_pb2\.pyi?$|(^|\/)meta\/[^/]*_snapshot\.json$|(^|\/)__snapshots__\//],
+  ['generated', /(^|\/)(dist|build|generated|__generated__|gen|vendor)\/|\.(min\.(js|css)|map|snap|pb\.go)$|[./](gen|generated)\.[a-z]+$|_pb2\.pyi?$|(^|\/)meta\/[^/]*_snapshot\.json$|(^|\/)__snapshots__\//],
   ['test', /(^|\/)(__tests__|tests?|spec|e2e|fixtures?|testdata)\/|[._-](test|spec)\.[cm]?[jt]sx?$|_test\.(go|py|rs|rb|exs?)$|(^|\/)test_[^/]*\.py$|Tests?\.(swift|kt|java|cs)$/],
   ['migration', /(^|\/)(migrations?|migrate|drizzle|alembic|db\/schema)\/|\.sql$/],
   ['manifest', /(^|\/)(package\.json|Cargo\.toml|pyproject\.toml|go\.mod|Gemfile|requirements[^/]*\.txt|tsconfig[^/]*\.json|\.github\/.*\.ya?ml|Dockerfile|[^/]*\.(toml|ya?ml))$/],
   ['docs', /\.(md|mdx|rst|txt)$/i],
 ];
-const HIDE_BY_DEFAULT = { lockfile: 'Lockfiles', generated: 'Generated files and snapshots', test: 'Tests' };
+const HIDE_BY_DEFAULT = { lockfile: 'Lockfiles', generated: 'Generated files and snapshots', test: 'Tests', manifest: 'Manifests and config (summarize them in `skipped`)' };
 
 export const kindOf = (path) => KINDS.find(([, re]) => re.test(path))?.[0] ?? 'code';
 
@@ -23,7 +23,6 @@ export function scaffold(files, meta) {
     chapters: [
       ...chapter('Core change', 'TODO(agent): split by idea, core first; one chapter = one thing to understand.', 'code'),
       ...chapter('Schema and migrations', '', 'migration'),
-      ...chapter('Manifests and config', '', 'manifest'),
       ...chapter('Docs', '', 'docs'),
     ],
     notes: [],
@@ -92,6 +91,10 @@ export function resolve(tour, files) {
     return { ...n, n: i + 1, side, anchored, chapter: hit?.ci ?? null, title: n.title ?? '', body: n.body ?? '' };
   });
   notes.forEach((n) => { n.label = `${n.n}/${notes.length}`; });
+  notes.forEach((n, i) => {
+    const prev = notes[i - 1];
+    if (prev && n.chapter != null && prev.chapter != null && n.chapter < prev.chapter) warnings.push(`note ${n.n} (chapter ${n.chapter + 1}) comes after note ${prev.n} (chapter ${prev.chapter + 1}); notes are numbered in array order, so put them in reading order`);
+  });
 
   const count = (f, hs) => (hs ?? f.hunks.map((_, i) => i)).reduce((s, i) => s + (f.hunks[i]?.additions ?? 0) + (f.hunks[i]?.deletions ?? 0), 0);
   const total = files.reduce((s, f) => s + f.additions + f.deletions, 0);
@@ -105,6 +108,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const mk = (p, n = 1) => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n${Array.from({ length: n }, (_, i) => `@@ -${i * 10 + 1},1 +${i * 10 + 1},1 @@\n-x\n+y\n`).join('')}`;
   const files = splitPatch(mk('src/a.ts', 2) + mk('src/a.test.ts') + mk('bun.lock') + mk('src/b.ts'));
   assert.deepEqual(files.map((f) => kindOf(f.path)), ['code', 'test', 'lockfile', 'code']);
+  assert.deepEqual(['src/routeTree.gen.ts', 'x/endpoints.generated.json', 'package.json'].map(kindOf), ['generated', 'generated', 'manifest']);
   assert.ok(globToRegExp('src/**/*.ts').test('src/x/y.ts') && globToRegExp('src/**/*.ts').test('src/y.ts') && !globToRegExp('*.ts').test('src/y.ts') && globToRegExp('a/**').test('a/b/c.ts'));
   const r = resolve({
     chapters: [{ title: 'A', files: [{ path: 'src/a.ts', hunks: [1] }] }],
