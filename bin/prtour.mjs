@@ -11,6 +11,7 @@ import { renderMarkdown, renderTerminal } from '../src/text.mjs';
 import { detect } from '../src/term-images.mjs';
 import { htmlToPdf } from '../src/pdf.mjs';
 import { findLanes } from '../src/lanes.mjs';
+import { iconNames, resolveIcons } from '../src/icons.mjs';
 import { renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
@@ -199,9 +200,18 @@ function writeTour(dir, files, meta, parts, flags) {
 
 // ---- outputs --------------------------------------------------------------
 
+// Icons named anywhere in the spec, fetched (or read from cache) before rendering.
+async function withIcons(r, spec) {
+  const { icons, missing } = await resolveIcons(iconNames(spec));
+  r.icons = icons;
+  for (const m of missing) r.warnings.push(`icon "${m}" not found in Lucide or SVGL (or offline with no cache)`);
+  return r;
+}
+
 async function render(dir, flags) {
   if (isRecap(dir)) return renderRecap(dir, flags);
   const r = load(dir);
+  await withIcons(r, r.tour);
   const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
   if (fmt === 'pdf') {
     for (const w of r.warnings) console.error(`warning: ${w}`);
@@ -219,6 +229,7 @@ async function render(dir, flags) {
 
 async function renderRecap(dir, flags) {
   const r = loadRecap(dir);
+  await withIcons(r, r.rc);
   for (const w of r.warnings) console.error(`warning: ${w}`);
   const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
   if (fmt === 'pdf') {

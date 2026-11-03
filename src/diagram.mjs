@@ -20,7 +20,7 @@ export function checkDiagram(d, chapterCount) {
 }
 
 function layout(d) {
-  const nodes = (d.nodes ?? []).map((n) => ({ ...n, w: Math.round(28 + n.label.length * CH + (n.change === 'new' ? 16 : 0) + (n.chapter ? 34 : 0)), layer: 0 }));
+  const nodes = (d.nodes ?? []).map((n) => ({ ...n, w: Math.round(28 + n.label.length * CH + (n.change === 'new' ? 16 : 0) + (n.chapter ? 34 : 0) + (n.icon ? 24 : 0)), layer: 0 }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const edges = (d.edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to));
   // ponytail: longest-path layering, capped at n passes so a cycle can't loop forever
@@ -56,12 +56,14 @@ function layout(d) {
   return { nodes, edges, byId, width, height: y - GY * 1.6 };
 }
 
+import { iconSVG } from './icons.mjs';
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 // Before/After toggle: "before" hides new nodes and edges and shows changed
 // nodes in their old style. Needs TOGGLE_JS on the page.
-export function diagramToggle(d, href = (n) => `#ch-${n}`) {
-  const svg = diagramSVG(d, href);
+export function diagramToggle(d, href = (n) => `#ch-${n}`, icons = null) {
+  const svg = diagramSVG(d, href, icons);
   if (!svg) return '';
   const has = (d.nodes ?? []).some((n) => n.change);
   return `<div class="dg-wrap" data-view="after">${has ? '<div class="dg-toggle tabs"><nav role="tablist"><button type="button" role="tab" data-dg="before" aria-selected="false">Before</button><button type="button" role="tab" data-dg="after" aria-selected="true">After</button></nav></div>' : ''}${svg}</div>`;
@@ -71,8 +73,10 @@ export const TOGGLE_CSS = `.dg-wrap{position:relative}.dg-toggle{position:absolu
 .dg-wrap[data-view=before] .dg-n-changed .dg-box{fill:var(--card);stroke:var(--border)}.dg-wrap[data-view=before] .dg-n-changed .dg-bar{opacity:0}`;
 export const TOGGLE_JS = `<script>document.addEventListener('click',e=>{const b=e.target.closest('[data-dg]');if(!b)return;const w=b.closest('.dg-wrap');w.dataset.view=b.dataset.dg;w.querySelectorAll('[data-dg]').forEach(x=>x.setAttribute('aria-selected',x===b))})</script>`;
 
-export function diagramSVG(d, href = (n) => `#ch-${n}`) {
+export function diagramSVG(d, href = (n) => `#ch-${n}`, icons = null) {
   if (!d?.nodes?.length) return '';
+  // Drop icons that didn't resolve, so no node keeps an empty gap.
+  d = { ...d, nodes: d.nodes.map((n) => (n.icon && !icons?.has(n.icon) ? { ...n, icon: undefined } : n)) };
   const { nodes, edges, byId, width, height } = layout(d);
   const pad = 2;
   const paths = edges.map((e) => {
@@ -96,7 +100,7 @@ export function diagramSVG(d, href = (n) => `#ch-${n}`) {
     const cls = n.change === 'new' ? 'dg-new' : n.change === 'changed' ? 'dg-changed' : 'dg-old';
     const label = `${n.change === 'new' ? '+ ' : ''}${n.label}`;
     const chip = n.chapter ? `<rect x="${n.x + n.w - 34}" y="${n.y + 10}" width="24" height="20" rx="5" class="dg-chip"/><text x="${n.x + n.w - 22}" y="${n.y + 24}" class="dg-chiptext" text-anchor="middle">${String(n.chapter).padStart(2, '0')}</text>` : '';
-    const body = `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${H}" rx="8" class="dg-box ${cls}"/>${n.change ? `<rect x="${n.x}" y="${n.y}" width="3" height="${H}" rx="1.5" class="dg-bar ${cls}"/>` : ''}<text x="${n.x + 14}" y="${n.y + 25}" class="dg-label">${esc(label)}</text>${chip}`;
+    const body = `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${H}" rx="8" class="dg-box ${cls}"/>${n.change ? `<rect x="${n.x}" y="${n.y}" width="3" height="${H}" rx="1.5" class="dg-bar ${cls}"/>` : ''}${n.icon ? iconSVG(icons, n.icon, n.x + 12, n.y + 12, 16) : ''}<text x="${n.x + (n.icon ? 36 : 14)}" y="${n.y + 25}" class="dg-label">${esc(label)}</text>${chip}`;
     const nc = n.change ? ` dg-n-${n.change}` : '';
     return n.chapter ? `<a href="${href(n.chapter)}" class="dg-link${nc}">${body}<title>Chapter ${n.chapter}</title></a>` : `<g class="dg-n${nc}">${body}</g>`;
   }).join('');

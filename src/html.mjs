@@ -5,6 +5,7 @@ import { preloadPatchDiff } from '@pierre/diffs/ssr';
 import { filePatch } from './patch.mjs';
 import fs from 'node:fs';
 import { TOGGLE_CSS, TOGGLE_JS, diagramToggle } from './diagram.mjs';
+import { ICON_CSS, iconHTML } from './icons.mjs';
 
 import { CSS, FONTS, THEME, counts, esc, n2, ui } from './ui.mjs';
 export { esc };
@@ -79,7 +80,7 @@ function mediaHTML(im) {
 function mapHTML(d) {
   if (!d?.nodes?.length) return '';
   const added = d.nodes.filter((x) => x.change === 'new').length;
-  return ui.card({ title: esc(d.title ?? 'Before / after'), description: d.caption ? esc(d.caption) : '', action: added ? `<span class="badge" data-variant="outline" style="color:var(--add)">+${added} new</span>` : '', body: diagramToggle(d) });
+  return ui.card({ title: esc(d.title ?? 'Before / after'), description: d.caption ? esc(d.caption) : '', action: added ? `<span class="badge" data-variant="outline" style="color:var(--add)">+${added} new</span>` : '', body: diagramToggle(d, undefined, ICONS.current) });
 }
 
 const visualsHTML = (v) => [mapHTML(v.diagram), v.mermaid ? ui.card({ body: `<pre class="mermaid">${esc(v.mermaid)}</pre>` }) : '', ...(v.images ?? []).map(mediaHTML)].filter(Boolean).join('');
@@ -89,7 +90,9 @@ const hunkCounts = (f, hs) => hs.reduce(([a, d], i) => [a + f.hunks[i].additions
 const entryCounts = (e) => hunkCounts(e.file, e.file.hunks.map((_, i) => i).filter((i) => !e.hunks || e.hunks.includes(i)));
 const unp = (h) => h.replace(/^<p>|<\/p>$/g, '');
 
+const ICONS = { current: null };
 export async function renderHTML(r, opts = {}) {
+  ICONS.current = r.icons ?? null;
   const o = { ...opts, shared: [], tokens: new Map() };
   const t = r.tour;
   const s = r.stats;
@@ -107,7 +110,7 @@ export async function renderHTML(r, opts = {}) {
       cards.push(ui.panel(`${loose}${await diffHTML(e.file, e.hunks, ns, o, true)}${rest ? `<div class="rest t-small t-muted"><a href="#files" data-tab="files">${rest} →</a></div>` : ''}`, ` id="${eid(ci, e)}"`));
     }
     chapters.push(`<section class="rail chapter" id="ch-${ci + 1}" data-chapter="${ci + 1}">
-<div class="rail-side stack"><div class="stack" style="gap:6px"><span class="t-label">Chapter ${n2(ci + 1)} of ${n2(N)}</span><h2 class="t-title">${esc(c.title)}</h2></div>
+<div class="rail-side stack"><div class="stack" style="gap:6px"><span class="t-label row" style="gap:8px">${c.icon ? iconHTML(r.icons, c.icon) : ''}Chapter ${n2(ci + 1)} of ${n2(N)}</span><h2 class="t-title">${esc(c.title)}</h2></div>
 <div>${md(c.body)}</div>
 <div class="row" style="gap:16px">${ui.check(`data-reviewed="${ci + 1}"`)}${ui.btn('Comment', `data-reply-chapter="${ci + 1}"`)}</div>
 <ul class="flist">${c.entries.map((e) => ui.fileRow(r.label(e.file.path), `#${eid(ci, e)}`, ...entryCounts(e), e.hunks || e.cut ? ` ${ui.badge('part', 'outline')}` : '')).join('')}</ul></div>
@@ -136,7 +139,7 @@ export async function renderHTML(r, opts = {}) {
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(t.title || 'Guided review')}</title><meta name="prtour-id" content="${esc(id)}">${o.live ? '<meta name="prtour-live" content="1">' : ''}${o.print ? '<meta name="prtour-print" content="1">' : ''}
-${FONTS}<style>${CSS}${PAGE_CSS}${TOGGLE_CSS}</style>${THEME}</head><body>
+${FONTS}<style>${CSS}${PAGE_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body>
 ${ui.tabs([['guide', 'Guide', true], ['files', `Files <span class="t-muted">${s.files}</span>`]], `<span class="row t-small t-muted no-print"><span id="progress-text"></span><span class="meter"><i id="progress-bar" style="width:0"></i></span></span>`)}
 <main class="page">
 <div data-panel="guide">

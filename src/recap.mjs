@@ -9,6 +9,7 @@ import { TOGGLE_CSS, TOGGLE_JS, checkDiagram, diagramMermaid, diagramToggle, dia
 import { CSS, THEME, counts, esc, ui } from './ui.mjs';
 import { md } from './html.mjs';
 import { kindOf } from './tour.mjs';
+import { ICON_CSS, iconHTML } from './icons.mjs';
 
 export const RECAP_BUDGET = { workstreams: 10 };
 const PALETTE = ['oklch(55% .17 155)', 'oklch(58% .19 259)', 'oklch(70% .17 65)', 'oklch(56% .22 293)', 'oklch(60% .21 18)', 'oklch(62% .12 210)', 'oklch(55% .09 120)', 'oklch(52% .15 330)', 'oklch(64% .14 40)', 'oklch(50% .05 260)'];
@@ -143,14 +144,14 @@ function resultsTable(t, rc) {
   return `<div class="results"><table class="table">${head}<tbody>${t.rows.map((row, ri) => `<tr${ri === t.rows.length - 1 && t.highlightLast !== false ? ' class="last"' : ''}>${row.map((c, i) => `<td${i ? ' class="num"' : ''}>${prLinks(esc(c), rc)}</td>`).join('')}</tr>`).join('')}</tbody></table>${t.note ? `<p class="t-small t-muted">${prLinks(esc(t.note), rc)}</p>` : ''}</div>`;
 }
 
-function section(w, n, rc) {
+function section(w, n, rc, icons) {
   const tag = [n, w.tag, w.name].filter(Boolean).join(' · ');
   const callout = (label, body) => (body ? `<aside class="callout-box"><div class="eyebrow">${esc(label)}</div>${prose(body, rc)}</aside>` : '');
-  const visuals = [w.diagram?.nodes?.length ? ui.card({ title: esc(w.diagram.title ?? 'Before / after'), description: w.diagram.caption ? esc(w.diagram.caption) : '', body: diagramToggle(w.diagram, () => '#') }) : '',
+  const visuals = [w.diagram?.nodes?.length ? ui.card({ title: esc(w.diagram.title ?? 'Before / after'), description: w.diagram.caption ? esc(w.diagram.caption) : '', body: diagramToggle(w.diagram, () => '#', icons) }) : '',
     w.mermaid ? ui.card({ body: `<pre class="mermaid">${esc(w.mermaid)}</pre>` }) : '', w.compare ? compare(w.compare) : '', ...(w.images ?? []).map(figure)].filter(Boolean).join('');
   const prLink = (p) => `<a class="pr" href="${rc.repo ? `https://github.com/${esc(rc.repo)}/pull/${p}` : `#pr-${p}`}">#${p}</a>`;
   return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
-<div class="eyebrow ws-tag">${esc(tag)}</div><h2 class="serif ws-title">${esc(w.title ?? w.name)}</h2>
+<div class="ws-head">${w.icon && icons?.has(w.icon) ? `<span class="ic-chip">${iconHTML(icons, w.icon)}</span>` : ''}<div class="eyebrow ws-tag">${esc(tag)}</div></div><h2 class="serif ws-title">${esc(w.title ?? w.name)}</h2>
 ${w.asked ? `<p class="asked"><span class="eyebrow">The ask</span> ${esc(w.asked)}</p>` : ''}
 ${w.before ? `<div class="prose">${prose(w.before, rc)}</div>` : ''}
 ${callout('The design call', w.designCall)}
@@ -170,21 +171,21 @@ export function renderRecapHTML(r, o = {}) {
   const s = r.stats;
   const range = rc.since ? `${fmtDay(rc.since)}–${fmtDay(rc.until ?? day(r.prs.at(-1)?.mergedAt ?? rc.since), { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
   const eyebrow = [rc.repo, rc.author, range, rc.eyebrow].filter(Boolean).map(esc).join(' · ');
-  const metrics = (rc.metrics ?? []).map((m) => `<div class="metric"><div class="serif metric-v">${m.before != null ? `${esc(m.before)} → ${esc(m.after)}${m.unit ? ` ${esc(m.unit)}` : ''}` : esc(m.value)}</div><div class="metric-l">${esc(m.label)}</div></div>`).join('');
-  const table = `<table class="table wstable"><thead><tr><th>Workstream</th><th>Who feels it</th><th class="num">PRs</th><th>Headline result</th></tr></thead><tbody>${r.ws.map((w) => `<tr><td><a href="#ws-${w.i + 1}"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a></td><td class="t-muted">${esc(w.whoFeelsIt ?? '')}</td><td class="num">${w.items.length}</td><td>${esc(w.headline ?? '')}</td></tr>`).join('')}${r.rest.length ? `<tr><td class="t-muted">Everything else</td><td class="t-muted">${esc(rc.otherPrs ?? '')}</td><td class="num">${r.rest.length}</td><td></td></tr>` : ''}</tbody></table>`;
+  const metrics = (rc.metrics ?? []).map((m) => `<div class="metric">${m.icon ? `<div class="metric-ic">${iconHTML(r.icons, m.icon)}</div>` : ''}<div class="serif metric-v">${m.before != null ? `${esc(m.before)} → ${esc(m.after)}${m.unit ? ` ${esc(m.unit)}` : ''}` : esc(m.value)}</div><div class="metric-l">${esc(m.label)}</div></div>`).join('');
+  const table = `<table class="table wstable"><thead><tr><th>Workstream</th><th>Who feels it</th><th class="num">PRs</th><th>Headline result</th></tr></thead><tbody>${r.ws.map((w) => `<tr><td><a href="#ws-${w.i + 1}" class="ws-cell">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : `<span class="dot" style="--ws:${w.color}"></span>`}${esc(w.name)}</a></td><td class="t-muted">${esc(w.whoFeelsIt ?? '')}</td><td class="num">${w.items.length}</td><td>${esc(w.headline ?? '')}</td></tr>`).join('')}${r.rest.length ? `<tr><td class="t-muted">Everything else</td><td class="t-muted">${esc(rc.otherPrs ?? '')}</td><td class="num">${r.rest.length}</td><td></td></tr>` : ''}</tbody></table>`;
   const legend = `<div class="legend">${r.ws.map((w) => `<a href="#ws-${w.i + 1}" class="t-small"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a>`).join('')}</div>`;
   const lanes = swimlanes(r);
   const all = `<details class="disclosure"><summary><span>All ${s.prs} PRs</span></summary><div class="table-container"><table class="table"><thead><tr><th>Merged</th><th>PR</th><th>What it did</th><th>Workstream</th><th>Lane</th><th class="num">Lines</th></tr></thead><tbody>${r.prs.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<tr id="pr-${p.number}"><td class="t-muted t-small" style="white-space:nowrap">${fmtDay(day(p.mergedAt))}</td><td><a href="${esc(p.url ?? '#')}" class="t-mono">#${p.number}</a></td><td>${esc(p.oneLiner || p.title)}</td><td class="t-small">${w ? `<span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}` : ''}</td><td class="t-small t-muted">${esc((rc.lanes ?? {})[p.lane] ?? p.lane ?? '')}</td><td class="num t-mono" style="white-space:nowrap">${counts(p.additions, p.deletions)}</td></tr>`; }).join('')}</tbody></table></div></details>`;
   const anyMermaid = r.ws.some((w) => w.mermaid);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rc.title || 'What shipped')}</title>${o.print ? '<meta name="prtour-print" content="1">' : ''}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
-<style>${CSS}${RECAP_CSS}${TOGGLE_CSS}</style>${THEME}</head><body><main class="page doc">
+<style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><main class="page doc">
 <header class="hero"><div class="eyebrow">${eyebrow}</div><h1 class="serif doc-title">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
 ${metrics ? `<div class="metrics panel">${metrics}</div>` : ''}
 <div class="panel chartbox"><div class="chart-h"><b>PRs merged per day</b><span class="t-small t-muted">${s.prs} PRs · ${counts(s.additions, s.deletions)}</span></div>${perDayChart(r)}${legend}</div>
 ${table}
 ${lanes ? `<div class="panel chartbox"><div class="chart-h"><b>Which agent lanes did the work</b><span class="t-small t-muted">one row per lane, each dot a merged PR</span></div>${lanes}</div>` : ''}
-${r.ws.map((w, k) => section(w, k + 1, rc)).join('\n')}
+${r.ws.map((w, k) => section(w, k + 1, rc, r.icons)).join('\n')}
 <section class="appendix">${all}</section>
 <footer class="t-small t-muted no-print" style="margin-top:48px">Made with <a href="https://github.com/2018kguo/prtour">prtour</a></footer>
 </main>${TOGGLE_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
@@ -206,6 +207,7 @@ const RECAP_CSS = `
 .sl-l{fill:var(--foreground);font-size:12px}.sl-n{fill:var(--muted-foreground);font-size:11px}.sl-track{stroke:var(--border)}
 .wstable{margin:8px 0 32px}.wstable td{vertical-align:top}.table .num{text-align:right;font-variant-numeric:tabular-nums}
 .ws{padding-top:72px;display:flex;flex-direction:column;gap:18px}
+.ws-head{display:flex;align-items:center;gap:12px}.ws-head .ic-chip{color:var(--ws)}.ws-cell{display:inline-flex;align-items:center;gap:8px}.ws-cell .ic{color:var(--ws)}.metric-ic{color:var(--muted-foreground);margin-bottom:8px}.metric-ic .ic{width:20px;height:20px}
 .ws-tag{color:var(--ws)}.ws-title{font-size:30px;line-height:1.18;font-weight:700;margin:-8px 0 0;text-wrap:balance}
 .asked{margin:0;font-size:15px;color:var(--muted-foreground);border-left:2px solid var(--ws);padding-left:12px}.asked .eyebrow{margin-right:6px}
 .prose{font-size:15.5px;line-height:1.7}.prose p{margin:0 0 12px}.prose p:last-child{margin:0}

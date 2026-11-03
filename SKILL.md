@@ -87,6 +87,13 @@ renders in the HTML and PDF, as Mermaid on GitHub, and as text in the terminal
   paths relative to the tour folder. For any UI change, a before/after
   screenshot says more than the diff. Images are embedded in the HTML.
 
+- `icon` (on chapters, diagram nodes, recap workstreams and metric cards):
+  a Lucide name for generic things (`"cpu"`, `"mic"`, `"file-text"`,
+  `"database"`; see lucide.dev) or an SVGL catalog title for products
+  (`"Microsoft Word"`, `"Slack"`, `"GitHub"`, `"PostgreSQL"`). Icons are
+  fetched once, cached, and inlined. A name that doesn't resolve is a `check`
+  warning.
+
 ## Writing
 
 The reviewer is a peer reading fast. Write plainly, in the codebase's own

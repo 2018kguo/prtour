@@ -54,6 +54,7 @@ export function resolve(tour, files) {
   const chapters = (tour.chapters ?? []).map((c, ci) => ({
     title: c.title || `Chapter ${ci + 1}`,
     body: c.body ?? c.explanation ?? '',
+    icon: c.icon,
     visual: { diagram: c.diagram, mermaid: c.mermaid, images: c.images ?? [] },
     entries: (c.files ?? []).flatMap((spec) => {
       const { path, hunks, lines } = typeof spec === 'string' ? { path: spec } : spec;
