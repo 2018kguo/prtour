@@ -41,7 +41,9 @@ export function resolveRecap(rc) {
   const prs = (rc.prs ?? []).slice().sort((a, b) => String(a.mergedAt).localeCompare(String(b.mergedAt)));
   const byNum = new Map(prs.map((p) => [p.number, p]));
   const wsOf = new Map();
-  const ws = (rc.workstreams ?? rc.themes ?? []).map((w, i) => {
+  const listed = rc.workstreams ?? rc.themes ?? [];
+  const ordered = [...listed.filter((w) => w.kind !== 'feature'), ...listed.filter((w) => w.kind === 'feature')];
+  const ws = ordered.map((w, i) => {
     for (const n of w.prs ?? []) {
       if (!byNum.has(n)) warnings.push(`workstream "${w.name ?? w.title}": #${n} is not in prs`);
       else if (wsOf.has(n)) warnings.push(`#${n} is in two workstreams`);
@@ -59,7 +61,11 @@ export function resolveRecap(rc) {
     ...ws.flatMap((w) => (w.wins ?? []).map((x) => [`"${w.name}" win`, typeof x === 'string' ? x : x.text, 170])),
     ...(rc.problems ?? []).flatMap((x, i) => [[`problem ${i + 1} symptom`, x.symptom, 130], [`problem ${i + 1} howBad`, x.howBad, 200], [`problem ${i + 1} now`, x.now, 150]]),
     ...prs.map((p) => [`#${p.number} oneLiner`, p.oneLiner, 160])];
-  for (const w of ws) if (!w.symptom) warnings.push(`"${w.name}": no symptom. Say what a user or engineer actually saw before, in plain words`);
+  for (const w of ws) {
+    if (w.kind === 'feature') { if (!w.demo) warnings.push(`"${w.name}": a feature needs "demo": how to show it, in 1 to 4 steps`); }
+    else if (!w.symptom) warnings.push(`"${w.name}": no symptom. Say what a user or engineer actually saw before, in plain words`);
+    for (const d of [w.demo ?? []].flat()) for (const hit of lint(d)) warnings.push(`writing, "${w.name}" demo: ${hit}`);
+  }
   for (const [where, text, max] of texts) {
     for (const hit of lint(text)) warnings.push(`writing, ${where}: ${hit}`);
     if (stripCode(text).length > max) warnings.push(`writing, ${where}: ${stripCode(text).length} chars (max ${max}); say less`);
@@ -162,7 +168,8 @@ function section(w, n, rc, icons) {
     w.trade ? `<h3 class="ws-h3">The trade we accepted</h3><div class="prose">${prose(w.trade, rc)}</div>` : ''].filter(Boolean).join('');
   return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
 <div class="ws-head">${w.icon && icons?.has(w.icon) ? `<span class="ic-chip">${iconHTML(icons, w.icon)}</span>` : ''}<div class="eyebrow ws-tag">${esc(tag)}</div></div><h2 class="serif ws-title">${esc(w.title ?? w.name)}</h2>
-${w.symptom || w.now || w.whyItMatters ? `<div class="pain"><div class="pain-before"><div class="eyebrow">What people saw</div><p class="pain-s">${prLinks(esc(w.symptom ?? ''), rc)}</p>${w.howBad ? `<p class="pain-d">${prLinks(esc(w.howBad), rc)}</p>` : ''}</div><div class="pain-now"><div class="eyebrow">Now</div><p class="pain-s">${prLinks(esc(w.now ?? w.whyItMatters ?? ''), rc)}</p></div></div>` : ''}
+${w.symptom || w.now || w.whyItMatters ? `<div class="pain"><div class="pain-before"><div class="eyebrow">${w.kind === 'feature' ? 'Before, you couldn\'t' : 'What people saw'}</div><p class="pain-s">${prLinks(esc(w.symptom ?? ''), rc)}</p>${w.howBad ? `<p class="pain-d">${prLinks(esc(w.howBad), rc)}</p>` : ''}</div><div class="pain-now"><div class="eyebrow">${w.kind === 'feature' ? 'Now you can' : 'Now'}</div><p class="pain-s">${prLinks(esc(w.now ?? w.whyItMatters ?? ''), rc)}</p></div></div>` : ''}
+${w.demo ? `<aside class="demo"><div class="eyebrow">Try it in a demo</div><ol>${[w.demo].flat().map((x) => `<li>${prLinks(md(x).replace(/^<p>|<\/p>$/g, ''), rc)}</li>`).join('')}</ol></aside>` : ''}
 ${wins.length ? `<ul class="wins">${wins.map((x) => `<li>${prLinks(md(x.text).replace(/^<p>|<\/p>$/g, ''), rc)}${(x.prs ?? []).length ? ` <span class="t-small">${x.prs.map(prLink).join(' ')}</span>` : ''}</li>`).join('')}</ul>` : ''}
 ${visuals}
 ${callout('The aha', w.designCall)}
@@ -173,13 +180,21 @@ ${details ? `<details class="disclosure ws-details"><summary><span>Engineering d
 </section>`;
 }
 
+// Two grids up top: problems that are now fixed, and new things to demo.
+function overviewGrids(r) {
+  const card = (w, body) => `<a class="pcard" href="#ws-${w.i + 1}" style="--ws:${w.color}">${w.icon && r.icons?.has(w.icon) ? `<span class="ic-chip">${iconHTML(r.icons, w.icon)}</span>` : ''}${body}</a>`;
+  const fixes = r.ws.filter((w) => w.kind !== 'feature' && w.symptom).map((w) => card(w, `<p class="serif pcard-s">${esc(w.symptom)}</p>${w.howBad ? `<p class="pcard-d">${esc(w.howBad)}</p>` : ''}${w.now ? `<p class="pcard-now"><span class="eyebrow">Now</span> ${esc(w.now)}</p>` : ''}`));
+  const feats = r.ws.filter((w) => w.kind === 'feature').map((w) => card(w, `<p class="serif pcard-s">${esc(w.title ?? w.name)}</p>${w.now ? `<p class="pcard-d">${esc(w.now)}</p>` : ''}${w.demo ? `<p class="pcard-now"><span class="eyebrow eb-demo">Demo</span> ${esc([w.demo].flat()[0])}</p>` : ''}`));
+  return `${fixes.length ? `<section><h2 class="serif sec-h">${esc(r.rc.problemsTitle ?? 'What was broken, now fixed')}</h2><div class="pgrid">${fixes.join('')}</div></section>` : ''}${feats.length ? `<section><h2 class="serif sec-h">New you can demo</h2><div class="pgrid">${feats.join('')}</div></section>` : ''}`;
+}
+
 export function renderRecapHTML(r, o = {}) {
   const rc = r.rc;
   const s = r.stats;
   const range = rc.since ? `${fmtDay(rc.since)}–${fmtDay(rc.until ?? day(r.prs.at(-1)?.mergedAt ?? rc.since), { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
   const eyebrow = [rc.repo, rc.author, range, rc.eyebrow].filter(Boolean).map(esc).join(' · ');
   const metrics = (rc.metrics ?? []).map((m) => `<div class="metric">${m.icon ? `<div class="metric-ic">${iconHTML(r.icons, m.icon)}</div>` : ''}<div class="serif metric-v${String(m.before ?? '').length + String(m.after ?? m.value ?? '').length + String(m.unit ?? '').length > 15 ? ' long' : ''}">${m.before != null ? `${esc(m.before)} → ${esc(m.after)}${m.unit ? ` ${esc(m.unit)}` : ''}` : esc(m.value)}</div><div class="metric-l">${esc(m.label)}</div></div>`).join('');
-  const table = `<table class="table wstable"><thead><tr><th>Workstream</th><th>Who feels it</th><th class="num">PRs</th><th>Headline result</th></tr></thead><tbody>${r.ws.map((w) => `<tr><td><a href="#ws-${w.i + 1}" class="ws-cell">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : `<span class="dot" style="--ws:${w.color}"></span>`}${esc(w.name)}</a></td><td class="t-muted">${esc(w.whoFeelsIt ?? '')}</td><td class="num">${w.items.length}</td><td>${esc(w.headline ?? '')}</td></tr>`).join('')}${r.rest.length ? `<tr><td class="t-muted">Everything else</td><td class="t-muted">${esc(rc.otherPrs ?? '')}</td><td class="num">${r.rest.length}</td><td></td></tr>` : ''}</tbody></table>`;
+  const table = `<table class="table wstable"><thead><tr><th>Workstream</th><th>Who feels it</th><th class="num">PRs</th><th>Headline result</th></tr></thead><tbody>${r.ws.map((w) => `<tr><td><a href="#ws-${w.i + 1}" class="ws-cell" title="${w.kind === 'feature' ? 'New capability' : 'Problem fixed'}">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : `<span class="dot" style="--ws:${w.color}"></span>`}${esc(w.name)}</a></td><td class="t-muted">${esc(w.whoFeelsIt ?? '')}</td><td class="num">${w.items.length}</td><td>${esc(w.headline ?? '')}</td></tr>`).join('')}${r.rest.length ? `<tr><td class="t-muted">Everything else</td><td class="t-muted">${esc(rc.otherPrs ?? '')}</td><td class="num">${r.rest.length}</td><td></td></tr>` : ''}</tbody></table>`;
   const legend = `<div class="legend">${r.ws.map((w) => `<a href="#ws-${w.i + 1}" class="t-small"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a>`).join('')}</div>`;
   const lanes = swimlanes(r);
   const all = `<details class="disclosure"><summary><span>All ${s.prs} PRs</span></summary><div class="table-container"><table class="table"><thead><tr><th>Merged</th><th>PR</th><th>What it did</th><th>Workstream</th><th>Lane</th><th class="num">Lines</th></tr></thead><tbody>${r.prs.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<tr id="pr-${p.number}"><td class="t-muted t-small" style="white-space:nowrap">${fmtDay(day(p.mergedAt))}</td><td><a href="${esc(p.url ?? '#')}" class="t-mono">#${p.number}</a></td><td>${esc(p.oneLiner || p.title)}</td><td class="t-small">${w ? `<span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}` : ''}</td><td class="t-small t-muted">${esc((rc.lanes ?? {})[p.lane] ?? p.lane ?? '')}</td><td class="num t-mono" style="white-space:nowrap">${counts(p.additions, p.deletions)}</td></tr>`; }).join('')}</tbody></table></div></details>`;
@@ -188,12 +203,12 @@ export function renderRecapHTML(r, o = {}) {
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
 <style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><main class="page doc">
 <header class="hero"><div class="eyebrow">${eyebrow}</div><h1 class="serif doc-title">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
-${(rc.problems ?? []).length ? `<section class="problems"><h2 class="serif sec-h">${esc(rc.problemsTitle ?? 'What was broken')}</h2><div class="pgrid">${rc.problems.map((x) => { const w = r.ws.find((y) => y.name === x.workstream) ?? r.ws[Number(x.workstream) - 1]; return `<a class="pcard" href="${w ? `#ws-${w.i + 1}` : '#'}" style="--ws:${w?.color ?? 'var(--primary)'}">${x.icon ? `<span class="ic-chip">${iconHTML(r.icons, x.icon)}</span>` : ''}<p class="serif pcard-s">${esc(x.symptom)}</p>${x.howBad ? `<p class="pcard-d">${esc(x.howBad)}</p>` : ''}${x.now ? `<p class="pcard-now"><span class="eyebrow">Now</span> ${esc(x.now)}</p>` : ''}</a>`; }).join('')}</div></section>` : ''}
+${overviewGrids(r)}
 ${metrics ? `<h2 class="serif sec-h">By the numbers</h2><div class="metrics panel">${metrics}</div>` : ''}
 <div class="panel chartbox"><div class="chart-h"><b>PRs merged per day</b><span class="t-small t-muted">${s.prs} PRs · <span class="t-add">+${s.additions.toLocaleString()}</span> <span class="t-del">−${s.deletions.toLocaleString()}</span></span></div>${perDayChart(r)}${legend}</div>
 ${table}
 ${lanes ? `<div class="panel chartbox"><div class="chart-h"><b>Which agent lanes did the work</b><span class="t-small t-muted">one row per lane, each dot a merged PR</span></div>${lanes}</div>` : ''}
-${r.ws.map((w, k) => section(w, k + 1, rc, r.icons)).join('\n').replace(/<details class="disclosure ws-details">/g, o.print ? '<details class="disclosure ws-details" open>' : '$&')}
+${r.ws.map((w, k) => `${k === 0 && w.kind !== 'feature' ? '<h2 class="serif part-h" id="fixed">Part 1 · What was broken, now fixed</h2>' : ''}${w.kind === 'feature' && r.ws[k - 1]?.kind !== 'feature' ? `<h2 class="serif part-h" id="new">${k ? 'Part 2 · ' : ''}New you can demo</h2>` : ''}${section(w, k + 1, rc, r.icons)}`).join('\n').replace(/<details class="disclosure ws-details">/g, o.print ? '<details class="disclosure ws-details" open>' : '$&')}
 <section class="appendix">${all}</section>
 <footer class="t-small t-muted no-print" style="margin-top:48px">Made with <a href="https://github.com/2018kguo/prtour">prtour</a></footer>
 </main>${TOGGLE_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
@@ -229,7 +244,8 @@ a.pr{font-family:var(--font-mono);font-size:.88em;color:var(--ws,var(--primary))
 .cmp input{grid-area:1/1;align-self:stretch;width:100%;margin:0;opacity:0;cursor:ew-resize}.cmp::after{content:"";position:absolute;top:0;bottom:0;left:var(--x);width:2px;background:var(--primary);pointer-events:none}
 .cmp-tag{position:absolute;top:10px;font:500 11px var(--font-mono);background:var(--background);padding:2px 6px;border-radius:4px;pointer-events:none}.cmp-b{left:10px}.cmp-a{right:10px}
 .appendix{padding-top:64px}
-.sec-h{font-size:24px;font-weight:700;margin:40px 0 16px}
+.sec-h{font-size:24px;font-weight:700;margin:40px 0 16px}.part-h{font-size:15px;font-family:var(--font-mono);font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-foreground);margin:96px 0 -40px;padding-top:24px;border-top:2px solid var(--foreground)}
+.demo{border-radius:var(--radius-lg);padding:16px 20px;background:color-mix(in oklab,var(--ws) 9%,var(--background));border:1px solid color-mix(in oklab,var(--ws) 25%,var(--background))}.demo .eyebrow{color:var(--ws);margin-bottom:6px}.demo ol{margin:0;padding-left:20px;font-size:15px;line-height:1.6}.eb-demo{color:var(--ws)!important}
 .pgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
 .pcard{display:flex;flex-direction:column;gap:10px;padding:22px;border:1px solid var(--border);border-radius:var(--radius-xl);background:var(--card);border-top:3px solid var(--ws);transition:box-shadow .15s}.pcard:hover{box-shadow:0 8px 24px -12px rgb(0 0 0/.18);color:inherit}
 .pcard .ic-chip{color:var(--ws)}.pcard-s{font-size:21px;line-height:1.3;font-weight:700;margin:0;text-wrap:balance}.pcard-d{font-size:14px;line-height:1.55;color:var(--muted-foreground);margin:0}

@@ -154,7 +154,14 @@ non-obvious idea that made the change work.
 2. Group PRs into 4 to 10 `workstreams` by outcome. Order by impact. Small or
    internal PRs that fit nowhere go in `otherPrs` (one line on what they are),
    not into a workstream of their own.
-3. Lead with the pain. Readers care what broke for people, then what fixed it.
+3. Every workstream is one of two kinds, set with `kind`: `"fix"` (a problem
+   people had, now solved) or `"feature"` (a new capability worth showing in a
+   demo). Internal work that is neither goes into `otherPrs`. Fixes render
+   first, then features. A feature uses `symptom` for what you couldn't do
+   before, `now` for what you can do now, and needs `demo`: 1 to 4 steps to
+   show it live (["Open any chat and click Desktop", "Click Take over and log
+   in", "Click Done, continue"]).
+   Lead with the pain. Readers care what broke for people, then what fixed it.
    For each workstream:
    - `symptom`: what a user or engineer actually lived through, in their words
      ("Your chat froze mid-answer for seconds at a time, at random"). No
