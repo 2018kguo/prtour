@@ -337,7 +337,8 @@ code{font-size:.88em;font-family:var(--font-mono);background:var(--muted);paddin
 .ws-meta{color:var(--muted-foreground);font-size:15px;margin:-6px 0 20px}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:28px;padding:18px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 .pair h3{margin:0 0 6px;color:var(--del)}.pair h3.now{color:var(--add)}.pair p{margin:0 0 8px}.pair-lead{font-weight:600}
-.wins,.demo{margin:0;padding-left:22px}.wins li,.demo li{margin:6px 0}
+.wins,.demo,.steps{margin:0;padding-left:24px}.wins{list-style:disc}.demo,.steps{list-style:decimal}.wins li::marker,.demo li::marker{color:var(--muted-foreground)}
+.dg{font:14px var(--font-sans)!important}.dg-bar{display:none}.dg-box{rx:6}.dg-elabel{font-size:13px!important}.wins li,.demo li{margin:6px 0}
 .refs{color:var(--muted-foreground);font-size:15px;white-space:nowrap}
 a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decoration:underline;text-decoration-color:var(--border);text-underline-offset:3px}a.pr:hover{color:var(--foreground)}
 .fig{margin:28px 0}.fig figcaption{margin-top:10px;color:var(--muted-foreground);font-size:15px;line-height:1.5}
