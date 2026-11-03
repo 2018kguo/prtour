@@ -68,7 +68,8 @@ export function diagramToggle(d, href = (n) => `#ch-${n}`, icons = null) {
   const has = (d.nodes ?? []).some((n) => n.change);
   return `<div class="dg-wrap" data-view="after">${has ? '<div class="dg-toggle tabs"><nav role="tablist"><button type="button" role="tab" data-dg="before" aria-selected="false">Before</button><button type="button" role="tab" data-dg="after" aria-selected="true">After</button></nav></div>' : ''}${svg}</div>`;
 }
-export const TOGGLE_CSS = `.dg-removed.dg-box{fill:none;stroke:var(--muted-foreground);stroke-dasharray:4 3}.dg-n-removed .dg-label{fill:var(--muted-foreground);text-decoration:line-through}.dg-e-removed .dg-edge{stroke-dasharray:4 3}
+export const TOGGLE_CSS = `@media (prefers-reduced-motion: no-preference){.dg-wrap[data-view=after] .dg-e-new .dg-edge{stroke-dasharray:5 4;animation:dgflow 1.1s linear infinite;stroke:var(--add);opacity:.9}}@keyframes dgflow{to{stroke-dashoffset:-18}}
+.dg-removed.dg-box{fill:none;stroke:var(--muted-foreground);stroke-dasharray:4 3}.dg-n-removed .dg-label{fill:var(--muted-foreground);text-decoration:line-through}.dg-e-removed .dg-edge{stroke-dasharray:4 3}
 .dg-wrap[data-view=after] .dg-n-removed,.dg-wrap[data-view=after] .dg-e-removed{opacity:0}
 .dg-wrap{position:relative}.dg-toggle{display:flex;justify-content:flex-end;margin:-6px 0 8px}.dg-toggle nav{transform:scale(.92);transform-origin:top right}
 .dg-n,.dg-e,.dg-link{transition:opacity .25s}.dg-wrap[data-view=before] .dg-n-new,.dg-wrap[data-view=before] .dg-e-new{opacity:0}

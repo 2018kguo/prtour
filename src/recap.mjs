@@ -59,6 +59,7 @@ export function resolveRecap(rc) {
     ...ws.flatMap((w) => [...TEXT_FIELDS.map(([k, max]) => [`"${w.name}" ${k}`, w[k], max]),
       ...[w.aha ?? []].flat().map((a) => [`"${w.name}" aha`, a.body, 600]), ...(w.sections ?? []).map((x) => [`"${w.name}" section "${x.title}"`, x.body, 900])]),
     ...ws.flatMap((w) => (w.wins ?? []).map((x) => [`"${w.name}" win`, typeof x === 'string' ? x : x.text, 170])),
+    ...ws.flatMap((w) => [[`"${w.name}" triedFirst`, w.triedFirst, 420], ...(w.steps?.items ?? []).flatMap((x) => [[`"${w.name}" step title`, x.title, 50], [`"${w.name}" step`, x.body, 150]])]),
     ...(rc.problems ?? []).flatMap((x, i) => [[`problem ${i + 1} symptom`, x.symptom, 130], [`problem ${i + 1} howBad`, x.howBad, 200], [`problem ${i + 1} now`, x.now, 150]]),
     ...prs.map((p) => [`#${p.number} oneLiner`, p.oneLiner, 160])];
   for (const w of ws) {
@@ -146,6 +147,26 @@ const figure = (im) => { const m = media(im); return m ? `<figure class="figure 
 // Drag to compare two screenshots of the same thing.
 const compare = (c) => { const a = media(c.before ?? {}); const b = media(c.after ?? {}); return a && b ? `<figure class="figure panel"><div class="cmp" style="--x:50%"><img src="${a.url}" alt="before"><img src="${b.url}" alt="after" class="cmp-after"><input type="range" min="0" max="100" value="50" aria-label="Before and after" oninput="this.parentNode.style.setProperty('--x',this.value+'%')"><span class="cmp-tag cmp-b">Before</span><span class="cmp-tag cmp-a">After</span></div>${c.caption ? `<figcaption>${esc(c.caption)}</figcaption>` : ''}</figure>` : ''; };
 
+function stepsHTML(st, rc) {
+  const items = st?.items ?? [];
+  if (!items.length) return '';
+  return `<figure class="steps" data-steps><div class="steps-row">${items.map((x, i) => `<button type="button" class="step${i === 0 ? ' on' : ''}" data-step="${i}">${x.tag ? `<span class="step-tag">${esc(x.tag)}</span>` : ''}<span class="step-t">${esc(x.title)}</span></button>`).join('<span class="step-arrow" aria-hidden="true">→</span>')}</div><div class="step-bodies">${items.map((x, i) => `<p class="step-b${i === 0 ? ' on' : ''}" data-step-b="${i}"><span class="step-n">${i + 1}/${items.length}</span> ${prLinks(esc(x.body ?? ''), rc)}</p>`).join('')}</div>${st.caption ? `<figcaption>${esc(st.caption)}</figcaption>` : ''}</figure>`;
+}
+const STEPS_JS = `<script>(()=>{const go=(f,i)=>{f.querySelectorAll('[data-step]').forEach(b=>b.classList.toggle('on',+b.dataset.step===i));f.querySelectorAll('[data-step-b]').forEach(b=>b.classList.toggle('on',+b.dataset.stepB===i));f.dataset.cur=i};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-step]');if(!b)return;const f=b.closest('[data-steps]');f.dataset.manual=1;go(f,+b.dataset.step)});
+if(matchMedia('(prefers-reduced-motion: reduce)').matches||document.querySelector('meta[name=prtour-print]'))return;
+const io=new IntersectionObserver(es=>es.forEach(en=>{const f=en.target;clearInterval(f._t);if(!en.isIntersecting)return;f._t=setInterval(()=>{if(f.dataset.manual)return clearInterval(f._t);const n=f.querySelectorAll('[data-step]').length;go(f,((+f.dataset.cur||0)+1)%n)},2600)}),{threshold:.6});
+document.querySelectorAll('[data-steps]').forEach(f=>io.observe(f))})()</script>`;
+
+// Left rail: sticky section nav, current section highlighted.
+function tocHTML(r) {
+  const fix = r.ws.filter((w) => w.kind !== 'feature');
+  const feat = r.ws.filter((w) => w.kind === 'feature');
+  const link = (w) => `<a href="#ws-${w.i + 1}" data-toc="ws-${w.i + 1}"><span class="dot" style="--ws:${w.color}"></span>${esc(w.name)}</a>`;
+  return `<nav class="toc no-print" aria-label="Sections"><a href="#top" data-toc="top">Overview</a>${fix.length ? `<div class="toc-h">Fixed</div>${fix.map(link).join('')}` : ''}${feat.length ? `<div class="toc-h">New</div>${feat.map(link).join('')}` : ''}<a href="#all-prs" data-toc="all-prs" class="toc-all">All PRs</a></nav>`;
+}
+const TOC_JS = `<script>(()=>{const ls=[...document.querySelectorAll('[data-toc]')];const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)ls.forEach(l=>l.classList.toggle('on',l.dataset.toc===e.target.id))}),{rootMargin:'-40% 0px -55% 0px'});ls.forEach(l=>{const t=document.getElementById(l.dataset.toc);t&&io.observe(t)})})()</script>`;
+
 function resultsTable(t, rc) {
   if (!t?.rows?.length) return '';
   const cols = t.columns ?? [];
@@ -172,7 +193,9 @@ ${w.symptom || w.now || w.whyItMatters ? `<div class="pain"><div class="pain-bef
 ${w.demo ? `<aside class="demo"><div class="eyebrow">Try it in a demo</div><ol>${[w.demo].flat().map((x) => `<li>${prLinks(md(x).replace(/^<p>|<\/p>$/g, ''), rc)}</li>`).join('')}</ol></aside>` : ''}
 ${wins.length ? `<ul class="wins">${wins.map((x) => `<li>${prLinks(md(x.text).replace(/^<p>|<\/p>$/g, ''), rc)}${(x.prs ?? []).length ? ` <span class="t-small">${x.prs.map(prLink).join(' ')}</span>` : ''}</li>`).join('')}</ul>` : ''}
 ${visuals}
+${stepsHTML(w.steps, rc)}
 ${callout('The aha', w.designCall)}
+${w.triedFirst ? `<aside class="callout-box tried"><div class="eyebrow">What we tried first</div>${prose(w.triedFirst, rc)}</aside>` : ''}
 ${[w.aha ?? []].flat().map((a) => callout(a.title ?? 'The aha', a.body)).join('')}
 ${w.asked || laneChips ? `<div class="ws-meta">${w.asked ? `<p class="asked"><span class="eyebrow">The ask</span> ${esc(w.asked)}</p>` : ''}${laneChips ? `<div class="row lanes"><span class="eyebrow">Agent lanes</span>${laneChips}</div>` : ''}</div>` : ''}
 ${details ? `<details class="disclosure ws-details"><summary><span>Engineering details</span><span class="grow"></span><span class="t-small t-muted">tables, measurements, trade-offs</span></summary><div class="stack" style="padding:6px 18px 18px">${details}</div></details>` : ''}
@@ -201,7 +224,7 @@ export function renderRecapHTML(r, o = {}) {
   const anyMermaid = r.ws.some((w) => w.mermaid);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rc.title || 'What shipped')}</title>${o.print ? '<meta name="prtour-print" content="1">' : ''}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
-<style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><main class="page doc">
+<style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><div class="shell">${tocHTML(r)}<main class="page doc" id="top">
 <header class="hero"><div class="eyebrow">${eyebrow}</div><h1 class="serif doc-title">${esc(rc.title || 'What shipped')}</h1>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
 ${overviewGrids(r)}
 ${metrics ? `<h2 class="serif sec-h">By the numbers</h2><div class="metrics panel">${metrics}</div>` : ''}
@@ -209,9 +232,9 @@ ${metrics ? `<h2 class="serif sec-h">By the numbers</h2><div class="metrics pane
 ${table}
 ${lanes ? `<div class="panel chartbox"><div class="chart-h"><b>Which agent lanes did the work</b><span class="t-small t-muted">one row per lane, each dot a merged PR</span></div>${lanes}</div>` : ''}
 ${r.ws.map((w, k) => `${k === 0 && w.kind !== 'feature' ? '<h2 class="serif part-h" id="fixed">Part 1 · What was broken, now fixed</h2>' : ''}${w.kind === 'feature' && r.ws[k - 1]?.kind !== 'feature' ? `<h2 class="serif part-h" id="new">${k ? 'Part 2 · ' : ''}New you can demo</h2>` : ''}${section(w, k + 1, rc, r.icons)}`).join('\n').replace(/<details class="disclosure ws-details">/g, o.print ? '<details class="disclosure ws-details" open>' : '$&')}
-<section class="appendix">${all}</section>
+<section class="appendix" id="all-prs">${all}</section>
 <footer class="t-small t-muted no-print" style="margin-top:48px">Made with <a href="https://github.com/2018kguo/prtour">prtour</a></footer>
-</main>${TOGGLE_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
+</main></div>${TOGGLE_JS}${STEPS_JS}${TOC_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
 }
 
 const RECAP_CSS = `
@@ -244,6 +267,23 @@ a.pr{font-family:var(--font-mono);font-size:.88em;color:var(--ws,var(--primary))
 .cmp input{grid-area:1/1;align-self:stretch;width:100%;margin:0;opacity:0;cursor:ew-resize}.cmp::after{content:"";position:absolute;top:0;bottom:0;left:var(--x);width:2px;background:var(--primary);pointer-events:none}
 .cmp-tag{position:absolute;top:10px;font:500 11px var(--font-mono);background:var(--background);padding:2px 6px;border-radius:4px;pointer-events:none}.cmp-b{left:10px}.cmp-a{right:10px}
 .appendix{padding-top:64px}
+.shell{display:grid;grid-template-columns:1fr minmax(0,860px) 1fr;gap:0 40px}.shell>.doc{grid-column:2;max-width:none;padding-left:0;padding-right:0}
+.toc{grid-column:1;justify-self:end;position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:72px 0 24px;display:flex;flex-direction:column;gap:2px;width:220px;font-size:13.5px}
+.toc a{padding:5px 10px;border-radius:7px;color:var(--muted-foreground);display:flex;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.toc a:hover{color:var(--foreground);background:var(--muted)}.toc a.on{color:var(--foreground);background:var(--muted);font-weight:500}
+.toc-h{font:500 10.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-foreground);margin:16px 10px 4px}.toc-all{margin-top:14px}
+@media (max-width:1280px){.shell{display:block}.toc{display:none}.shell>.doc{padding-left:clamp(16px,5vw,80px);padding-right:clamp(16px,5vw,80px);max-width:860px}}
+.figure figcaption,.steps figcaption{text-align:center}
+.steps{margin:0;padding:18px;border:1px solid var(--border);border-radius:var(--radius-xl);background:var(--card)}
+.steps-row{display:flex;align-items:stretch;gap:8px;overflow-x:auto;padding-bottom:4px}
+.step{flex:1;min-width:120px;text-align:left;border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--background);cursor:pointer;display:flex;flex-direction:column;gap:4px;transition:border-color .2s,background .2s,transform .2s}
+.step.on{border-color:var(--ws);background:color-mix(in oklab,var(--ws) 10%,var(--background));transform:translateY(-2px)}
+.step-tag{font:500 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ws)}.step-t{font:600 13.5px/1.35 var(--font-sans)}
+.step-arrow{align-self:center;color:var(--muted-foreground);flex:none}
+.step-bodies{position:relative;min-height:3.2em;margin-top:14px}.step-b{margin:0;font-size:15px;line-height:1.55;display:none}.step-b.on{display:block;animation:stepin .3s ease}
+.step-n{font:500 11px var(--font-mono);color:var(--ws);margin-right:6px}
+@keyframes stepin{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+.tried{border-style:dashed;background:none}.tried .eyebrow{color:var(--muted-foreground)!important}
+@media print{.step-b{display:block!important;margin-bottom:6px}.step-arrow{display:none}}
 .sec-h{font-size:24px;font-weight:700;margin:40px 0 16px}.part-h{font-size:15px;font-family:var(--font-mono);font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-foreground);margin:96px 0 -40px;padding-top:24px;border-top:2px solid var(--foreground)}
 .demo{border-radius:var(--radius-lg);padding:16px 20px;background:color-mix(in oklab,var(--ws) 9%,var(--background));border:1px solid color-mix(in oklab,var(--ws) 25%,var(--background))}.demo .eyebrow{color:var(--ws);margin-bottom:6px}.demo ol{margin:0;padding-left:20px;font-size:15px;line-height:1.6}.eb-demo{color:var(--ws)!important}
 .pgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}

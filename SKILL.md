@@ -177,6 +177,11 @@ non-obvious idea that made the change work.
      something. Extra ones go in `aha`.
    - One visual that makes the aha obvious: `diagram` (readers toggle
      Before/After), `mermaid`, `images`, or `compare`.
+   - `steps`: a step-through of the aha, 3 to 5 cards readers click through
+     (it auto-plays): `{"caption", "items": [{"tag": "Before", "title",
+     "body"}]}`. Good for "what happens in order".
+   - `triedFirst`: what was tried and dropped before the fix that shipped,
+     and why. Only when the context says so.
    - `asked`: what the person set out to do, paraphrased from the lane context.
    - Everything dense is folded under "Engineering details": `before` (the
      technical cause), `results` tables, `proof`, `sections`, `trade`. Keep it
