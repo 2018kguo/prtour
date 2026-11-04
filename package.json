@@ -32,7 +32,10 @@
     "claude-code",
     "skill"
   ],
-  "repository": "github:2018kguo/prtour",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2018kguo/prtour.git"
+  },
   "license": "MIT",
   "dependencies": {
     "@pierre/diffs": "1.6.2"
