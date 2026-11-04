@@ -5,13 +5,11 @@
 // .input[type=checkbox], .textarea, .kbd. This file adds only page layout and
 // the three diff colors (Tailwind's green/amber/red), nothing component-like.
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-const basecoatDir = path.dirname(fileURLToPath(import.meta.resolve('basecoat-css')));
-const BASECOAT = fs.readFileSync(path.join(basecoatDir, 'basecoat.cdn.min.css'), 'utf8');
+// ponytail: vendored so installs skip the 6 MB basecoat-css package; refresh by copying its dist/basecoat.cdn.min.css.
+const BASECOAT = fs.readFileSync(new URL('./vendor/basecoat.min.css', import.meta.url), 'utf8');
 
 const LAYOUT = `
 :root{--add:oklch(52.7% .154 150.069);--add-bg:oklch(98.2% .018 155.826);--add-line:oklch(87.1% .15 154.449);

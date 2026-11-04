@@ -35,8 +35,7 @@
   "repository": "github:2018kguo/prtour",
   "license": "MIT",
   "dependencies": {
-    "@pierre/diffs": "1.6.2",
-    "basecoat-css": "1.1.0"
+    "@pierre/diffs": "1.6.2"
   },
   "author": "Kevin Guo",
   "homepage": "https://github.com/2018kguo/prtour",
