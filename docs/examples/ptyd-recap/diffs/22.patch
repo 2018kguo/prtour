@@ -1,0 +1,889 @@
+diff --git a/bench/README.md b/bench/README.md
+index 17868e2..9b6d5c5 100644
+--- a/bench/README.md
++++ b/bench/README.md
+@@ -50,46 +50,62 @@ for its workload conditions and remaining native leads.
+ 
+ ## Attached scrolling
+ 
+-Human attachments keep a status row below the app. The client compares exact
+-rendered rows, moves matching transcript rows within the app rectangle, and
+-paints only the rows that changed. Keyboard and wheel responses bypass the
+-background paint budget. Idle views have no periodic redraw wakeups.
+-
+-Six alternating A/B rounds on an Apple M5 Pro, with the same synthetic transcript
+-and Go toolchain, measured these medians:
+-
+-| Measurement | Window | Before | After |
+-|---|---|---:|---:|
+-| Sequential wheel input → completed paint, p50 | 120×30 / 240×64 | 16.7 ms | 4.5 ms |
+-| Sequential wheel input → completed paint, p95 | 120×30 / 240×64 | 17.4 ms | 4.6 ms |
+-| Bytes sent to the viewing terminal per frame | 120×30 | 6,162 | 385 |
+-| Bytes sent to the viewing terminal per frame | 240×64 | 21,242 | 729 |
+-| Parse and render time per frame | 120×30 | 37.7–38.2 µs | 25.3–26.0 µs |
+-| Parse and render time per frame | 240×64 | 105–110 µs | 66.7–67.7 µs |
++Human attachments compare exact rendered rows, move matching transcript rows
++within the app rectangle, and keep the status bar outside it. The bar follows
++the viewer's theme and stays cached while the app scrolls. Keyboard and wheel
++input bypass the background paint budget; incomplete synchronized frames keep
++that priority until they can actually paint. Idle panes have no paint timer.
++The daemon also prioritizes a short output burst after attached input while
++retaining bulk-output batching.
++
++Six alternating A/B rounds on an Apple M5 Pro used identical synthetic transcript
++fixtures and Go toolchains. These are medians across the six runs:
++
++| Sequential wheel input to completed paint | Direct PTY control | Ptyd before | Ptyd after |
++|---|---:|---:|---:|
++| 120×30, p50 | 0.03 ms | 4.50 ms | 0.15 ms |
++| 120×30, p95 | 0.04 ms | 4.56 ms | 0.18 ms |
++| 240×64, p50 | 0.06 ms | 4.49 ms | 0.21 ms |
++| 240×64, p95 | 0.08 ms | 4.55 ms | 0.25 ms |
+ 
+ Latency includes real local PTYs, the app, daemon, TCP and the client painting
+ into a host emulator. Each run sends 100 sequential wheel events, waiting for
+-each synchronized frame to finish. The direct PTY control uses equal app
+-dimensions and measured about 0.05–0.09 ms p50. Ptyd still adds work and output
+-batching; this is a comparison with the previous attachment path, not a claim
+-of direct-terminal latency. Neither case measures a GUI, GPU or physical display.
+-
+-The separate rendering fixture parses full transcript redraws and renders into
+-the same host emulator. Timings are Go benchmark elapsed time on a shared
+-workstation; ranges cover upward and downward scrolling. Emitted
+-bytes include occasional full redraws when the finite transcript wraps. These
+-synthetic fixtures do not establish a speedup for every terminal application.
+-
+-[Download the samples, source patch and fixture](https://github.com/2018kguo/ptyd/releases/download/v0.12.1/ptyd-attachment-benchmarks.tar.gz).
+-The [evidence index](../docs/benchmarks.json) pins the source revisions and archive
+-checksum. To compare an explicit baseline with your checkout:
++each synchronized frame to finish. The direct control uses equal app dimensions.
++These results require both the updated client and daemon. A client update works
++with an existing daemon, but does not change that daemon's batching behavior.
++Leave running work intact and update the daemon at its next safe restart.
++
++Snapshot setup also avoids an ANSI repaint that a framed viewer never uses,
++and skips cloning retained screens when their geometry already matches:
++
++| Snapshot setup, 2,000 history rows | Before | After |
++|---|---:|---:|
++| Live screen, elapsed time | 42.6 µs | 22.5 µs |
++| Loaded static screen, elapsed time | 139 µs | 22.1 µs |
++| Live screen, allocated bytes | 287,040 | 139,584 |
++| Loaded static screen, allocated bytes | 593,048 | 139,584 |
++
++This fixture verifies exactly 2,000 retained rows. It excludes network, PTY I/O,
++disk loading and human-client painting. The separate one/eight-attacher fanout
++fixture found no measured throughput change. Prioritizing response chunks can
++cost a few more allocations per input; these are targeted improvements rather
++than a claim that every metric improves.
++
++All timings are elapsed measurements on a shared workstation. No fixture
++measures a GUI, GPU or physical display, and none establishes a speedup for
++every terminal application.
++[Download all samples, source patch and fixtures](https://github.com/2018kguo/ptyd/releases/download/v0.12.2/ptyd-attachment-benchmarks.tar.gz).
++The [evidence index](../docs/benchmarks.json) pins sources and the archive checksum.
++To repeat the comparisons:
+ 
+ ```sh
+-BASELINE=22af6fb358221be74a35df32a86aa7d5c7eb871c
+-COUNT=6 BENCHTIME=200ms OUT=.bench/paint \
+-  bench/ab.sh "$BASELINE" ./internal/client '^BenchmarkPaneScroll$'
++BASELINE=23b2404a86bbabc16f95a93d225bd6441aeb5586
+ COUNT=6 BENCHTIME=100x OUT=.bench/latency \
+   bench/ab.sh "$BASELINE" ./internal/client '^BenchmarkAttachScrollLatency$'
++COUNT=6 BENCHTIME=200ms OUT=.bench/snapshot \
++  bench/ab.sh "$BASELINE" ./internal/terminal '^BenchmarkRenderedAttach$'
++COUNT=6 BENCHTIME=200ms OUT=.bench/fanout \
++  bench/ab.sh "$BASELINE" ./internal/terminal '^BenchmarkAttachFanout/(K=1|K=8)$'
+ ```
+ 
+ ## Run a comparison
+diff --git a/cmd/ptyd/workspace.go b/cmd/ptyd/workspace.go
+index 9e56afd..8528343 100644
+--- a/cmd/ptyd/workspace.go
++++ b/cmd/ptyd/workspace.go
+@@ -486,7 +486,7 @@ func workspace(c client.API, start terminal.GroupID, initial terminal.ID, in, ou
+ 		historyView := info.Status != terminal.StatusRunning
+ 		result, attachErr := client.Attach(ctx, client.Options{
+ 			Addr: c.Addr, Token: c.Token, ID: string(info.ID), Label: label,
+-			Human: true, Hold: historyView, ReadOnly: historyView,
++			Human: true, Hold: historyView, ReadOnly: historyView, ViewerColors: colors,
+ 		}, in, out, resize)
+ 		var unread []byte
+ 		if result.Detached && attachErr == nil {
+@@ -501,7 +501,9 @@ func workspace(c client.API, start terminal.GroupID, initial terminal.ID, in, ou
+ 			v.notice = "Could not open: " + attachErr.Error()
+ 		} else if !result.Detached {
+ 			ended, endErr := waitExited(ctx, c, info.ID)
+-			if ctx.Err()!=nil {return ctx.Err()}
++			if ctx.Err() != nil {
++				return ctx.Err()
++			}
+ 			switch {
+ 			case endErr != nil:
+ 				v.notice = "Connection closed: " + endErr.Error()
+diff --git a/docs/benchmarks.json b/docs/benchmarks.json
+index 58fad53..9c86c66 100644
+--- a/docs/benchmarks.json
++++ b/docs/benchmarks.json
+@@ -9,11 +9,14 @@
+     "current_results": "bench/native-mining"
+   },
+   "attachment_scrolling": {
+-    "url": "https://github.com/2018kguo/ptyd/releases/download/v0.12.1/ptyd-attachment-benchmarks.tar.gz",
+-    "sha256": "ec23352c28595bfe20fabc26e30222b6b5cdedea18f04658b10fd5ccd717d2e4",
+-    "baseline_commit": "22af6fb358221be74a35df32a86aa7d5c7eb871c",
+-    "source_commit": "712076b949ad955af56702fff2470004fed44304",
+-    "fixture_sha256": "fcef3b1d7c563aeb2feb78e66221ac9cf0b2b3f0d22c9a46e29a344645bd2c97",
++    "url": "https://github.com/2018kguo/ptyd/releases/download/v0.12.2/ptyd-attachment-benchmarks.tar.gz",
++    "sha256": "f3c22031408b809286da3dff31b7a5c02e62927dab243a7f2207033e1946e76a",
++    "baseline_commit": "23b2404a86bbabc16f95a93d225bd6441aeb5586",
++    "source_commit": "1799ae4a5c05ee5bee60eae4422b4882d057b3cc",
++    "fixtures": {
++      "internal/client/pane_bench_test.go": "fcef3b1d7c563aeb2feb78e66221ac9cf0b2b3f0d22c9a46e29a344645bd2c97",
++      "internal/terminal/hotpath_bench_test.go": "46e7deaff45b3e361a7ed8036963395a4a3a3df7889e8e6521d2ad7b59df40f6"
++    },
+     "rounds": 6,
+     "manifest": "manifest.json"
+   }
+diff --git a/docs/demo.gif b/docs/demo.gif
+index 4ed352d..6a3424c 100644
+Binary files a/docs/demo.gif and b/docs/demo.gif differ
+diff --git a/docs/development.md b/docs/development.md
+index 65e1abd..405abe2 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -139,6 +139,11 @@ the app rectangle. Input responses paint without waiting for the background
+ refresh budget; idle panes have no periodic paint timer. The maintained
+ [attachment benchmarks](../bench/README.md#attached-scrolling) measure emitted
+ bytes, CPU work and local input-to-paint latency separately.
++Status checks cover dark/light themes, narrow windows, Unicode labels across
++palette changes, and restoring the app's grapheme mode. Queue tests control the
++held-read boundary so an input, overflow or end wake cannot disappear just
++before sleep. Static-view tests keep source snapshots unchanged across matching
++and resized geometry, and verify later output cannot change returned bytes.
+ 
+ Native discovery tests cover loaded Codex threads without rollouts, original-tab
+ observations without conversation authority, same-terminal deduplication and
+diff --git a/docs/reference.md b/docs/reference.md
+index d9e1767..45bb325 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -261,12 +261,18 @@ Human TTY attachments reserve the bottom row for the session name and
+ `jk: back`. The app receives one fewer PTY row and cannot draw over this
+ indicator by clearing, scrolling or switching screens. The client draws cells
+ and preserves the app's cursor, keyboard modes, colors and links. Mouse events
+-for the status row do not reach the app. The window/tab title identifies the
++for the status row do not reach the app. The bar uses a subtle surface, a group
++and terminal label, an attachment state and a right-aligned return hint. It uses
++the viewer's known colors; without them it follows the app's palette. The
++window/tab title identifies the
+ view too. App title updates retain the ptyd prefix and hint;
+ the previous title is restored on return. Matching transcript rows move within
+ the app rectangle instead of repainting the whole screen. Keyboard and wheel
+ responses can paint immediately; background output batches at up to 120 paints
+ per second, and idle views do not poll for redraws.
++The daemon prioritizes a short response burst after attached input; bulk output
++still coalesces. Daemon changes take effect when it restarts. Updating only the
++client preserves running work and gives it the current status bar and renderer.
+ `ptyd term attach --raw` forwards terminal
+ output directly without reserving a row; piped output remains raw too. The title is a view label; it does not verify
+ the current conversation after navigation inside an agent.
+diff --git a/internal/client/attach.go b/internal/client/attach.go
+index 616ad8a..7cd896e 100644
+--- a/internal/client/attach.go
++++ b/internal/client/attach.go
+@@ -20,6 +20,7 @@ import (
+ 	"golang.org/x/term"
+ 
+ 	"github.com/2018kguo/ptyd/internal/api"
++	"github.com/2018kguo/ptyd/internal/terminal"
+ )
+ 
+ // resetLocal undoes modes a program may have switched on in the local
+@@ -58,6 +59,7 @@ type Options struct {
+ 	rendered bool
+ 	// InitialInput precedes bytes read from the local terminal.
+ 	InitialInput []byte
++	ViewerColors *terminal.TerminalColors // known host theme; used only for status chrome
+ }
+ 
+ // AttachResult describes the handoff back to the caller. PendingInput contains
+@@ -126,6 +128,11 @@ func Attach(ctx context.Context, opts Options, in, out *os.File, winch <-chan os
+ 		if framed {
+ 			frame = newPane(out, opts.Label, cols, rows)
+ 			frame.viewOnly = readOnly
++			if opts.ViewerColors != nil {
++				if palette, err := opts.ViewerColors.Palette(); err == nil {
++					frame.viewerPalette = &palette
++				}
++			}
+ 
+ 			output = frame
+ 			frameReady = frame.ready
+@@ -217,8 +224,13 @@ func Attach(ctx context.Context, opts Options, in, out *os.File, winch <-chan os
+ 	}
+ 	outputDone := (<-chan struct{})(copied)
+ 	drawFrame := func() error {
++		before := frame.paints
+ 		err := frame.draw(false)
+-		lastDraw = time.Now()
++		// An incomplete synchronized frame did not paint. Keep its input
++		// priority until the update actually reaches the host terminal.
++		if frame.paints != before {
++			lastDraw = time.Now()
++		}
+ 		return err
+ 	}
+ 	for {
+diff --git a/internal/client/pane.go b/internal/client/pane.go
+index 9402f60..4f99fc9 100644
+--- a/internal/client/pane.go
++++ b/internal/client/pane.go
+@@ -5,7 +5,6 @@ import (
+ 	"io"
+ 	"strings"
+ 	"sync"
+-	"unicode"
+ 
+ 	"github.com/2018kguo/phosphor"
+ )
+@@ -14,25 +13,29 @@ import (
+ // Apps can clear, scroll or switch screens without painting over the status row.
+ // Only attached human views allocate this model; the API byte stream stays raw.
+ type pane struct {
+-	history      []historyRow
+-	historyBytes int
+-	mu           sync.Mutex
+-	screen       *phosphor.Terminal
+-	out          io.Writer
+-	label        string
+-	finished     bool
+-	viewOnly     bool
+-	cols, rows   int
+-	changed      bool
+-	lastModes    phosphor.Modes
+-	haveModes    bool
+-	sequences    sequenceReader
+-	err          error
+-	title        string
+-	initialized  bool
+-	painted      []paneRow
+-	buffer       []byte
+-	ready        chan struct{}
++	history       []historyRow
++	historyBytes  int
++	mu            sync.Mutex
++	screen        *phosphor.Terminal
++	out           io.Writer
++	label         string
++	finished      bool
++	viewOnly      bool
++	cols, rows    int
++	changed       bool
++	lastModes     phosphor.Modes
++	haveModes     bool
++	sequences     sequenceReader
++	err           error
++	title         string
++	initialized   bool
++	painted       []paneRow
++	buffer        []byte
++	ready         chan struct{}
++	paints        uint64 // completed host writes; only the drawing goroutine changes it
++	statusKey     paneStatusKey
++	status        []byte
++	viewerPalette *phosphor.Palette
+ }
+ 
+ func newPane(out io.Writer, label string, cols, rows int) *pane {
+@@ -101,20 +104,7 @@ func (p *pane) draw(force bool) error {
+ 		force = true
+ 	}
+ 	b = p.appendDamage(b, view, force)
+-	if force {
+-		b = fmt.Appendf(b, "\x1b[%d;1H\x1b[0m\x1b[7m", p.rows)
+-		state := "attached"
+-		if p.viewOnly {
+-			state = "viewing"
+-		}
+-		if p.finished {
+-			state = "finished"
+-		}
+-		text := paneLabel(p.label, state, p.cols)
+-		b = append(b, text...)
+-		b = append(b, strings.Repeat(" ", max(p.cols-displayWidth(text), 0))...)
+-		b = append(b, "\x1b[0m"...)
+-	}
++	b = p.appendStatus(b, force)
+ 	modes := p.screen.Modes()
+ 	if !p.haveModes || modes != p.lastModes {
+ 		for _, m := range []struct {
+@@ -152,6 +142,9 @@ func (p *pane) draw(force bool) error {
+ 		p.title = title
+ 	}
+ 	cur := view.Cursor()
++	// Row/status encoders select their own join modes. Restore the app's
++	// mode even when its input modes did not otherwise change this frame.
++	b = appendMode(b, 2027, modes.GraphemeClustering)
+ 	shape := int(max(cur.Shape, phosphor.CursorBlock)) * 2
+ 	if cur.Blink {
+ 		shape--
+@@ -160,6 +153,7 @@ func (p *pane) draw(force bool) error {
+ 	b = appendMode(b, 25, cur.Visible)
+ 	b = append(b, "\x1b[?2026l"...)
+ 	_, p.err = p.out.Write(b)
++	p.paints++
+ 	p.buffer = b
+ 	p.screen.ClearDirty()
+ 	p.changed = false
+@@ -179,21 +173,6 @@ func displayWidth(s string) int {
+ 	}
+ 	return n
+ }
+-func paneLabel(label, state string, cols int) string {
+-	var clean strings.Builder
+-	for _, r := range label {
+-		if !unicode.IsControl(r) {
+-			clean.WriteRune(r)
+-		}
+-	}
+-	hint := "jk: back"
+-	prefix := " ptyd · " + state + " · "
+-	if cols < displayWidth(prefix)+displayWidth(hint)+6 {
+-		return clipPane("ptyd · "+hint, cols)
+-	}
+-	budget := max(cols-displayWidth(prefix)-displayWidth(hint)-5, 0)
+-	return prefix + clipPane(clean.String(), budget) + "  ·  " + hint
+-}
+ func clipPane(s string, width int) string {
+ 	if displayWidth(s) <= width {
+ 		return s
+diff --git a/internal/client/pane_status.go b/internal/client/pane_status.go
+new file mode 100644
+index 0000000..09ad0b5
+--- /dev/null
++++ b/internal/client/pane_status.go
+@@ -0,0 +1,110 @@
++package client
++
++import (
++	"fmt"
++	"strings"
++	"unicode"
++
++	"github.com/2018kguo/phosphor"
++)
++
++type paneStatusKey struct {
++	cols                   int
++	label, state           string
++	foreground, background phosphor.RGB
++}
++
++func (p *pane) appendStatus(b []byte, force bool) []byte {
++	state := "attached"
++	if p.viewOnly {
++		state = "viewing"
++	}
++	if p.finished {
++		state = "finished"
++	}
++	palette := p.screen.Palette()
++	if p.viewerPalette != nil {
++		palette = *p.viewerPalette
++	}
++	key := paneStatusKey{p.cols, p.label, state, palette.Foreground, palette.Background}
++	if key != p.statusKey || len(p.status) == 0 {
++		p.statusKey = key
++		p.status = appendPaneStatus(p.status[:0], key)
++		force = true
++	}
++	if force {
++		b = fmt.Appendf(b, "\x1b[%d;1H", p.rows)
++		b = append(b, p.status...)
++	}
++	return b
++}
++
++func appendPaneStatus(b []byte, key paneStatusKey) []byte {
++	bg, fg := key.background, key.foreground
++	mix := func(percent int) phosphor.RGB {
++		channel := func(a, b uint8) uint8 { return uint8((int(a)*(100-percent) + int(b)*percent) / 100) }
++		return phosphor.RGB{R: channel(bg.R, fg.R), G: channel(bg.G, fg.G), B: channel(bg.B, fg.B)}
++	}
++	surface, muted := mix(7), mix(65)
++	accent := phosphor.RGB{R: 31, G: 115, B: 106}
++	if 299*int(bg.R)+587*int(bg.G)+114*int(bg.B) < 128000 {
++		accent = phosphor.RGB{R: 137, G: 198, B: 190}
++	}
++	if key.state == "finished" {
++		accent = muted
++	}
++	b = fmt.Appendf(b, "\x1b[0m\x1b]8;;\x1b\\\x1b[?2027l\x1b[48;2;%d;%d;%dm", surface.R, surface.G, surface.B)
++	put := func(text string, color phosphor.RGB, bold bool) {
++		weight := 22
++		if bold {
++			weight = 1
++		}
++		b = fmt.Appendf(b, "\x1b[%d;38;2;%d;%d;%dm%s", weight, color.R, color.G, color.B, text)
++	}
++	if key.cols < 18 {
++		text := "ptyd · jk: back"
++		if key.cols < displayWidth(text) {
++			text = "jk: back"
++		}
++		text = clipPane(text, key.cols)
++		put(text, fg, false)
++		put(strings.Repeat(" ", max(key.cols-displayWidth(text), 0)), fg, false)
++		return append(b, "\x1b[0m"...)
++	}
++	var clean strings.Builder
++	for _, r := range key.label {
++		if !unicode.IsControl(r) {
++			clean.WriteRune(r)
++		}
++	}
++	hint := "jk: back"
++	right := hint
++	if key.cols >= 48 {
++		right = key.state + "   " + hint
++	}
++	left := " ● ptyd"
++	name := clipPane(clean.String(), max(key.cols-displayWidth(left)-displayWidth(right)-7, 0))
++	if name != "" {
++		left += "  │  " + name
++	}
++	// The name has lower priority than the return hint at small widths.
++	padding := max(key.cols-displayWidth(left)-displayWidth(right)-1, 1)
++	put(" ● ", accent, false)
++	put("ptyd", accent, true)
++	if name != "" {
++		put("  │  ", muted, false)
++		if group, terminal, ok := strings.Cut(name, " / "); ok {
++			put(group+" / ", muted, false)
++			put(terminal, fg, true)
++		} else {
++			put(name, fg, true)
++		}
++	}
++	put(strings.Repeat(" ", padding), muted, false)
++	if right != hint {
++		put(key.state+"   ", muted, false)
++	}
++	put(hint, accent, true)
++	put(" ", fg, false)
++	return append(b, "\x1b[0m"...)
++}
+diff --git a/internal/client/pane_test.go b/internal/client/pane_test.go
+index 3c80422..98feec4 100644
+--- a/internal/client/pane_test.go
++++ b/internal/client/pane_test.go
+@@ -75,7 +75,7 @@ func TestFramedAttachReservesRowAcrossResize(t *testing.T) {
+ 	winch := make(chan os.Signal, 1)
+ 	done := make(chan result, 1)
+ 	go func() {
+-		r, e := Attach(context.Background(), Options{Addr: addr, Token: "tok", ID: string(info.ID), Label: info.Name}, u.slave, u.slave, winch)
++		r, e := Attach(context.Background(), Options{Addr: addr, Token: "tok", ID: string(info.ID), Label: info.Name, ViewerColors: &terminal.TerminalColors{Foreground: "#d8dee9", Background: "#282c34"}}, u.slave, u.slave, winch)
+ 		done <- result{r.Detached, e}
+ 	}()
+ 	eventually(t, "pane and background", func() bool {
+@@ -462,3 +462,76 @@ func TestPaneScrollDamagePreservesRenderedState(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestPaneStatusThemeWidthAndCaching(t *testing.T) {
++	for _, theme := range []struct{ name, fg, bg string }{{"dark", "#d8dee9", "#282c34"}, {"light", "#20252b", "#fafafa"}} {
++		for _, state := range []string{"attached", "viewing", "finished"} {
++			for width := 1; width <= 100; width++ {
++				var wire bytes.Buffer
++				p := newPane(&wire, "project / codex", width, 8)
++				p.viewOnly = state == "viewing"
++				p.finished = state == "finished"
++				p.Write([]byte("\x1b]10;" + theme.fg + "\a\x1b]11;" + theme.bg + "\aAPP"))
++				if err := p.draw(false); err != nil {
++					t.Fatal(err)
++				}
++				host := phosphor.New(width, 8)
++				host.Write(wire.Bytes())
++				line := host.Line(7)
++				if width >= 8 && !strings.Contains(line, "jk: back") {
++					t.Fatalf("%s/%s/%d lost back hint: %q", theme.name, state, width, line)
++				}
++				if width >= 48 && !strings.Contains(line, state) {
++					t.Fatalf("state missing: %q", line)
++				}
++				for x := 0; x < width; x++ {
++					if host.Cell(x, 7).Style.Attrs&phosphor.AttrInverse != 0 {
++						t.Fatal("status used inverse video")
++					}
++					if host.Cell(x, 7).Style.Bg != host.Cell(0, 7).Style.Bg {
++						t.Fatal("status background has a gap")
++					}
++				}
++				wire.Reset()
++				p.Write([]byte("\x1b[HNEW"))
++				p.draw(false)
++				if strings.Contains(wire.String(), "jk: back") {
++					t.Fatal("app output repainted the unchanged status bar")
++				}
++				if width == 80 {
++					wire.Reset()
++					p.Write([]byte("\x1b]11;#567890\a"))
++					p.draw(false)
++					if !strings.Contains(wire.String(), "jk: back") {
++						t.Fatal("changed background did not refresh status")
++					}
++				}
++			}
++		}
++	}
++}
++
++func TestPaneStatusUnicodeKeepsEdgesAcrossPaletteChanges(t *testing.T) {
++	var wire bytes.Buffer
++	p := newPane(&wire, "repo / 👩‍💻 work", 80, 8)
++	host := phosphor.New(80, 8)
++	for _, write := range []string{"\x1b[?2027h\x1b[48;2;30;40;50m\x1b[2J", "\x1b]10;#aabbcc\a", "\x1b]11;#223344\a", "\x1b[Hupdate"} {
++		p.Write([]byte(write))
++		if err := p.draw(false); err != nil {
++			t.Fatal(err)
++		}
++		host.Write(wire.Bytes())
++		wire.Reset()
++		if line := host.Line(7); strings.Count(line, "jk: back") != 1 || !strings.HasSuffix(line, "jk: back") {
++			t.Fatalf("status shifted: %q", line)
++		}
++		for x := 0; x < 80; x++ {
++			if host.Cell(x, 7).Style.Bg != host.Cell(0, 7).Style.Bg {
++				t.Fatalf("background gap at %d", x)
++			}
++		}
++		if !host.Modes().GraphemeClustering {
++			t.Fatal("status did not restore app join mode")
++		}
++	}
++}
+diff --git a/internal/terminal/attach.go b/internal/terminal/attach.go
+index c5d75ff..e16e7eb 100644
+--- a/internal/terminal/attach.go
++++ b/internal/terminal/attach.go
+@@ -36,15 +36,16 @@ const (
+ // feeds the screen), so a repaint taken under scrMu is exactly in step
+ // with the queue.
+ type attacher struct {
+-	human        bool
+-	renderedView bool
+-	rawResponder bool // writable raw viewer supplies terminal replies
+-	mu           sync.Mutex
+-	buf          []byte
+-	spare        []byte // a buffer the reader is done with, reused by push
+-	overflow     bool   // dropped output; the next read is a repaint
+-	ended        bool   // the terminal's output has ended
+-	wake         chan struct{}
++	human            bool
++	renderedView     bool
++	rawResponder     bool // writable raw viewer supplies terminal replies
++	mu               sync.Mutex
++	buf              []byte
++	spare            []byte    // a buffer the reader is done with, reused by push
++	overflow         bool      // dropped output; the next read is a repaint
++	ended            bool      // the terminal's output has ended
++	interactiveUntil time.Time // a short response burst bypasses bulk batching
++	wake             chan struct{}
+ }
+ 
+ func (a *attacher) push(p []byte) {
+@@ -84,6 +85,13 @@ func (a *attacher) signal() {
+ 	}
+ }
+ 
++func (a *attacher) prioritizeInput(until time.Time) {
++	a.mu.Lock()
++	a.interactiveUntil = until
++	a.mu.Unlock()
++	a.signal()
++}
++
+ // Attachment is a client attached to a terminal: it receives an initial
+ // repaint, then the raw output, and may send input and resize.
+ type Attachment struct {
+@@ -159,9 +167,11 @@ func (m *Manager) Attach(id ID, options AttachOptions) (*Attachment, error) {
+ 		}
+ 	}
+ 
+-	initial := t.screen.Repaint(true)
++	var initial []byte
+ 	if options.Rendered {
+ 		initial = t.screen.Snapshot()
++	} else {
++		initial = t.screen.Repaint(true)
+ 	}
+ 	if t.outputEnded {
+ 		a.ended = true
+@@ -214,7 +224,7 @@ func (at *Attachment) ReadUpdate(ctx context.Context) (AttachmentUpdate, error)
+ 			return AttachmentUpdate{Data: at.repaint(), Snapshot: at.rendered}, nil
+ 		}
+ 		if n := len(a.buf); n > 0 {
+-			if wait := Coalesce - time.Since(at.sent); wait > 0 && !at.held && n >= CoalesceMin && n < holdMax {
++			if wait := Coalesce - time.Since(at.sent); wait > 0 && time.Until(a.interactiveUntil) <= 0 && !at.held && n >= CoalesceMin && n < holdMax {
+ 				a.mu.Unlock()
+ 				at.held = true
+ 				if err := at.sleep(ctx, wait); err != nil {
+@@ -276,6 +286,14 @@ func (at *Attachment) sleep(ctx context.Context, d time.Duration) error {
+ 	case <-at.a.wake:
+ 	default:
+ 	}
++	// A wake may have arrived between choosing to coalesce and this drain.
++	// Recheck its sticky condition before sleeping; later events keep their wake.
++	at.a.mu.Lock()
++	ready := time.Until(at.a.interactiveUntil) > 0 || len(at.a.buf) >= holdMax || at.a.overflow || at.a.ended
++	at.a.mu.Unlock()
++	if ready {
++		return nil
++	}
+ 	select {
+ 	case <-at.arm(d):
+ 		return nil
+@@ -331,6 +349,11 @@ func (at *Attachment) Write(p []byte) error {
+ 	if !t.running() {
+ 		return ErrNotRunning
+ 	}
++	// Large redraws caused by typing or a wheel event are interactive too.
++	// Wake an already-held read as well as bypassing the next coalescing wait.
++	if len(p) > 0 {
++		at.a.prioritizeInput(time.Now().Add(Coalesce))
++	}
+ 	_, err := t.ptmx.Write(p)
+ 	return err
+ }
+@@ -475,16 +498,20 @@ func (m *Manager) closeUnusedNativeView(id ID) {
+ }
+ 
+ func staticAttachment(scr *phosphor.Terminal, options AttachOptions) (*Attachment, error) {
+-	copy := phosphor.New(1, 1)
+-	if err := copy.RestoreSnapshot(scr.Snapshot(), trustedSnapshotLimits()); err != nil {
+-		return nil, err
+-	}
+-	if options.Cols > 0 && options.Rows > 0 {
++	cols, rows := scr.Size()
++	if options.Cols > 0 && options.Rows > 0 && (cols != int(options.Cols) || rows != int(options.Rows)) {
++		copy := phosphor.New(1, 1)
++		if err := copy.RestoreSnapshot(scr.Snapshot(), trustedSnapshotLimits()); err != nil {
++			return nil, err
++		}
+ 		copy.Resize(int(options.Cols), int(options.Rows))
++		scr = copy
+ 	}
+-	initial := copy.Repaint(true)
++	var initial []byte
+ 	if options.Rendered {
+-		initial = copy.Snapshot()
++		initial = scr.Snapshot()
++	} else {
++		initial = scr.Repaint(true)
+ 	}
+ 	return &Attachment{initial: initial, readOnly: true, rendered: options.Rendered, a: &attacher{ended: true, wake: make(chan struct{}, 1)}}, nil
+ }
+diff --git a/internal/terminal/attach_test.go b/internal/terminal/attach_test.go
+index 7122bac..4fe6bb8 100644
+--- a/internal/terminal/attach_test.go
++++ b/internal/terminal/attach_test.go
+@@ -104,7 +104,11 @@ func TestTypingClientGetsItsSize(t *testing.T) {
+ 	if got, _ := m.Get(info.ID); got.Attached != 2 {
+ 		t.Fatalf("attached %d", got.Attached)
+ 	}
++	beforeInput := time.Now()
+ 	_ = a.Write([]byte("x"))
++	if !a.a.interactiveUntil.After(beforeInput) || !b.a.interactiveUntil.IsZero() {
++		t.Fatal("typing did not prioritize only its own attachment")
++	}
+ 	if got := size(); got != "100x30" {
+ 		t.Fatalf("after a typed: %s", got)
+ 	}
+@@ -211,6 +215,31 @@ func TestAttachCoalescesBulkOutput(t *testing.T) {
+ 	if !at.timer.Stop() {
+ 		t.Fatal("full queue waited for its timer")
+ 	}
++	// Input wakes a held batch. Its short priority window covers an entire
++	// response burst, including split synchronized frames, then batching resumes.
++	at.sent = time.Now().Add(time.Hour)
++	a.push(bulk[:2048])
++	ctx, done, _ = startRead()
++	wait(ctx, done)
++	a.prioritizeInput(time.Now().Add(time.Hour))
++	if result := <-done; result.err != nil || len(result.data) != 2048 {
++		t.Fatalf("input did not release held output: %d bytes, %v", len(result.data), result.err)
++	}
++	if !at.timer.Stop() {
++		t.Fatal("input waited for the coalescing timer")
++	}
++	a.push(bulk[:2048])
++	if b, err := at.Read(ready); err != nil || len(b) != 2048 {
++		t.Fatal("split response was held", err)
++	}
++	a.prioritizeInput(time.Now().Add(-time.Hour))
++	a.push(bulk[:2048])
++	ctx, done, _ = startRead()
++	wait(ctx, done)
++	at.timer.Reset(0)
++	if result := <-done; result.err != nil || len(result.data) != 2048 {
++		t.Fatal("background batching did not resume", result.err)
++	}
+ 	// Expire the idle timer, then wait until Read has released the buffer
+ 	// and entered its next wait before canceling it.
+ 	ctx, done, cancel := startRead()
+@@ -340,3 +369,63 @@ func TestRenderedOverflowRecoversPaletteAndFutureOutput(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestStaticAttachmentDoesNotChangeRetainedSource(t *testing.T) {
++	for _, rendered := range []bool{false, true} {
++		for _, size := range [][2]uint16{{0, 0}, {80, 12}, {40, 6}} {
++			scr := phosphor.New(80, 12)
++			scr.Write([]byte(strings.Repeat("\x1b[32mretained history\x1b[0m\r\n", 30) + "\x1b[?1049h\x1b[Heditor\x1b[?1049l\x1b]2;unfinished"))
++			before := scr.Snapshot()
++			at, err := staticAttachment(scr, AttachOptions{Cols: size[0], Rows: size[1], ReadOnly: true, Rendered: rendered})
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !bytes.Equal(scr.Snapshot(), before) {
++				t.Fatal("static view mutated the retained source")
++			}
++			update, err := at.ReadUpdate(context.Background())
++			if err != nil || len(update.Data) == 0 || update.Snapshot != rendered {
++				t.Fatalf("invalid static view: %v", err)
++			}
++			scr.Write([]byte(" title\aFUTURE"))
++			if rendered {
++				view := phosphor.New(1, 1)
++				if err := view.RestoreSnapshot(update.Data, trustedSnapshotLimits()); err != nil {
++					t.Fatal(err)
++				}
++				if strings.Contains(strings.Join(view.Lines(), "\n"), "FUTURE") {
++					t.Fatal("later writes changed an already-created snapshot")
++				}
++			}
++			at.Close()
++		}
++	}
++}
++
++func TestCoalescingDoesNotLoseWakeBeforeSleep(t *testing.T) {
++	for _, event := range []string{"input", "full", "overflow", "end"} {
++		t.Run(event, func(t *testing.T) {
++			a := &attacher{wake: make(chan struct{}, 1)}
++			at := &Attachment{a: a}
++			switch event {
++			case "input":
++				a.prioritizeInput(time.Now().Add(time.Hour))
++			case "full":
++				a.push(make([]byte, holdMax))
++			case "overflow":
++				a.push(make([]byte, maxAttachBuffer+1))
++			case "end":
++				a.end()
++			}
++			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++			defer cancel()
++			if err := at.sleep(ctx, time.Hour); err != nil {
++				t.Fatalf("wake was discarded: %v", err)
++			}
++			if at.timer != nil {
++				at.timer.Stop()
++				t.Fatal("ready event armed a batching timer")
++			}
++		})
++	}
++}
+diff --git a/internal/terminal/display.go b/internal/terminal/display.go
+index 8df56ec..c0e6c2d 100644
+--- a/internal/terminal/display.go
++++ b/internal/terminal/display.go
+@@ -15,7 +15,8 @@ type TerminalColors struct {
+ 	Background string `json:"background"`
+ }
+ 
+-func (c *TerminalColors) palette() (phosphor.Palette, error) {
++// Palette validates the color pair and applies it to the default palette.
++func (c *TerminalColors) Palette() (phosphor.Palette, error) {
+ 	p := phosphor.DefaultPalette()
+ 	if c == nil {
+ 		return p, nil
+diff --git a/internal/terminal/hotpath_bench_test.go b/internal/terminal/hotpath_bench_test.go
+index 16f873e..ec9bc31 100644
+--- a/internal/terminal/hotpath_bench_test.go
++++ b/internal/terminal/hotpath_bench_test.go
+@@ -373,3 +373,48 @@ func BenchmarkRestoreGhosts(b *testing.B) {
+ 		b.StartTimer()
+ 	}
+ }
++
++// Rendered viewers need a binary checkpoint, including retained history. No
++// producer PTY or transport is involved: this isolates daemon attachment setup.
++func BenchmarkRenderedAttach(b *testing.B) {
++	for _, history := range []int{0, 2000} {
++		b.Run(fmt.Sprintf("history%d", history), func(b *testing.B) {
++			m := NewManager()
++			t := fakeTerminal(m, 0, 120, 40)
++			b.Cleanup(func() {
++				m.mu.Lock()
++				delete(m.terms, t.info.ID)
++				m.mu.Unlock()
++				m.CloseAll()
++			})
++			for i := 0; i < history+39; i++ {
++				t.screen.Write([]byte(fmt.Sprintf("\x1b[32mrow-%04d\x1b[0m project files and notes\r\n", i)))
++			}
++			if got := len(t.screen.ScrollbackLines()); got != history {
++				b.Fatalf("retained %d rows, want %d", got, history)
++			}
++			for _, ghost := range []bool{false, true} {
++				b.Run(fmt.Sprintf("ghost%t", ghost), func(b *testing.B) {
++					b.ReportAllocs()
++					for b.Loop() {
++						var at *Attachment
++						var err error
++						if ghost {
++							at, err = staticAttachment(t.screen, AttachOptions{Rendered: true, ReadOnly: true})
++						} else {
++							at, err = m.Attach(t.info.ID, AttachOptions{Rendered: true})
++						}
++						if err != nil {
++							b.Fatal(err)
++						}
++						update, err := at.ReadUpdate(context.Background())
++						if err != nil || !update.Snapshot || len(update.Data) == 0 {
++							b.Fatalf("invalid snapshot: %v", err)
++						}
++						at.Close()
++					}
++				})
++			}
++		})
++	}
++}
+diff --git a/internal/terminal/manager.go b/internal/terminal/manager.go
+index 5e4ad00..82fed60 100644
+--- a/internal/terminal/manager.go
++++ b/internal/terminal/manager.go
+@@ -249,7 +249,7 @@ func (m *Manager) create(cfg CreateConfig) (Info, error) {
+ 
+ // normalize validates cfg and fills in defaults.
+ func (m *Manager) normalize(cfg *CreateConfig) error {
+-	if _, err := cfg.TerminalColors.palette(); err != nil {
++	if _, err := cfg.TerminalColors.Palette(); err != nil {
+ 		return err
+ 	}
+ 	if cfg.Name == "" {
+@@ -393,7 +393,7 @@ func (m *Manager) spawn(cfg CreateConfig, sp spawnSpec) (Info, error) {
+ 	}
+ 
+ 	reply := new(queryReplies)
+-	palette, _ := cfg.TerminalColors.palette() // normalize validated this pair
++	palette, _ := cfg.TerminalColors.Palette() // normalize validated this pair
+ 	options := []phosphor.Option{phosphor.WithReply(reply)}
+ 	if cfg.TerminalColors != nil {
+ 		options = append(options, phosphor.WithPalette(palette))

@@ -160,34 +160,44 @@ keep the engineering detail one click away.
    one-line `otherPrs`. Check coverage: every user-visible change should land
    in a workstream.
 3. Each workstream, top to bottom (this is the order readers see):
-   - `title`: a newspaper headline. Say who or what changed and by how much,
-     with the number ("One tracked edit on a 251-page Word document: 12.5 s
-     before, under 0.52 s now"). No paired slogans ("X reads Y, and Z stays
-     W"), no cleverness, nothing a reader can't check.
-   - `symptom` and `howBad`: what people saw, and how often or how badly,
-     with a sourced number. `now`: what they get today.
+   - `title`: a newspaper headline. Say what changed and by how much, with
+     the number ("Scrolling an attached session: 16.7 ms to paint before,
+     0.15 ms now"). `check` warns when a fix or improvement headline has no
+     number. No paired slogans ("Big files load in seconds, and edits stay
+     put"), no cleverness, nothing a reader can't check.
+   - `name`: a 2 to 4 word plain noun phrase for the side nav ("Attached
+     scrolling"). Never a subtitle or tagline. The renderer writes each
+     section's meta line itself (PR count and merge dates); don't add one.
+   - `symptom` and `howBad`: what people lived through, in their words, with
+     no internals, then how often or how badly with a sourced number.
+     Not "terminals came back from a replayed ANSI repaint"; instead "after a
+     restart, your terminals came back with the cursor in the wrong place".
+     `now`: what they get today.
    - `explain`: why it happened, for a smart non-engineer. Name the concept
-     once and say what it means ("Node runs every chat on one thread; a long
-     CPU task on that thread stops every chat on it until it finishes").
+     once and say what it means ("A grapheme is what a reader sees as one
+     character, such as a flag emoji, even when it is several code points").
+   - Section headers are fixed by the renderer (Fixes, New features,
+     Improvements, Why it happened, How it works). Don't invent punchy ones.
    - One or two visuals, never more:
      - `timeline`: the clearest way to show contention or waiting. Rows over
        a few seconds, Before and After, with a play button:
-       `{"caption", "length": 10, "unit": "seconds", "rows": ["Main thread",
-       "Your chat", "PDF thread"], "before": [{"row": 0, "from": 0, "to": 9.4,
-       "kind": "busy", "label": "Parse another chat's PDF"}, {"row": 1, "from":
-       0, "to": 9.4, "kind": "frozen", "label": "No words"}], "after": […]}`.
+       `{"caption", "length": 20, "unit": "ms", "rows": ["Your wheel step",
+       "ptyd", "Your screen"], "before": [{"row": 1, "from": 0, "to": 16.7,
+       "kind": "wait", "label": "Wait for the next 60 Hz tick"}, {"row": 2,
+       "from": 0, "to": 16.7, "kind": "frozen", "label": "Old rows"}],
+       "after": […]}`.
        Kinds: busy, stream, frozen, wait.
      - `chart`: real measurements over time, with hover readouts and marks
        for deploys: `{"title", "caption", "unit": "%", "points": [{"x":
-       "2026-11-03T08", "label": "8am", "y": 13.8, "note": "max freeze 2.3 s",
-       "hi": true}], "marks": [{"x": "2026-11-03T18", "label": "#11256
-       deployed"}]}`.
+       "2026-11-03T08", "label": "8am", "y": 13.8, "note": "p99 2.3 s",
+       "hi": true}], "marks": [{"x": "2026-11-03T18", "label": "#123
+       deployed"}]}`. With 12 points or fewer it draws labelled bars.
      - `diagram` (Before/After map), `mermaid`, `steps`, `images`.
    - `wins`: 3 to 5 one-line results that lead with the number, each with
      its `prs`.
    - `diffs`: at most two targeted snippets of the code that carries the
      idea, each `{"pr", "file", "lines": [from, to], "caption"}` (new-file line
-     numbers; a few lines, not a whole file). The caption says what to look at.
+     numbers; 16 lines at most, `check` warns past that). The caption says what to look at.
    - `designCall`: the idea that made it work, in two or three sentences.
      `triedFirst` when the context says what was tried and dropped.
    - `details`: the engineering notes, folded by default:
@@ -201,7 +211,10 @@ keep the engineering detail one click away.
 5. Every number comes from a PR, a context file or measured evidence. Never
    estimate. The writing rules above apply, and `check` enforces them, plus the
    limits on visuals and diffs per workstream. Then `render` (HTML),
-   `--format pdf`, `--format md`, or `show`.
+   `--format pdf`, `--format md`, or `show`. The PDF is compact by design
+   (10 pt, PR lists left out); the HTML holds everything.
+6. Read it back as someone who wasn't there. If a headline needs the body to
+   make sense, or a symptom names an internal, rewrite it.
 
 The page follows common critiques of generated design, so don't fight it:
 one type family, no labels above headings, no icon tiles or colored card

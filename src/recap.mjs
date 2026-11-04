@@ -85,8 +85,10 @@ export function resolveRecap(rc) {
     if (!w.items.length) warnings.push(`"${w.name}": no PRs; list them in "prs"`);
     if (w.kind === 'feature' && !w.demo) warnings.push(`"${w.name}": a feature needs "demo": how to show it, in 1 to 4 steps`);
     if (w.kind !== 'feature' && !w.symptom) warnings.push(`"${w.name}": no symptom. Say what a user or engineer actually saw before, in plain words`);
+    if (w.kind !== 'feature' && w.title && !/\d/.test(w.title)) warnings.push(`"${w.name}" title: no number. Write it like a newspaper headline: what changed and by how much`);
     const visuals = [w.timeline, w.chart, w.diagram, w.mermaid, w.steps, w.compare, ...(w.images ?? [])].filter(Boolean).length;
     if (visuals > 2) warnings.push(`"${w.name}": ${visuals} visuals; keep the one or two that explain the most`);
+    for (const d of w.diffs ?? []) if (d.lines && (d.lines[1] ?? d.lines[0]) - d.lines[0] + 1 > 16) warnings.push(`"${w.name}" diff ${d.file}: ${d.lines[1] - d.lines[0] + 1} lines; show at most 16, the ones that carry the idea`);
     if ((w.diffs ?? []).length > 2) warnings.push(`"${w.name}": ${w.diffs.length} diffs; show at most 2, the ones that carry the idea`);
     warnings.push(...checkDiagram(w.diagram, 0).filter((x) => !x.includes('chapter')).map((x) => `"${w.name}" ${x}`));
   }
@@ -386,7 +388,7 @@ a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decora
 pre.mermaid{margin:0;font:14px var(--font-mono);color:var(--muted-foreground);white-space:pre-wrap}pre.mermaid[data-processed]{color:inherit;display:flex;justify-content:center}
 @media (max-width:700px){.pair,.daynotes{grid-template-columns:1fr}.hero h1{font-size:32px}}
 @page{margin:12mm 14mm}
-@media print{body{font-size:10pt;line-height:1.45}.doc{max-width:none;padding:0}.ws{padding-top:18px;margin-top:0}.part{break-before:page;margin-top:0}.ws-title{font-size:16pt}h3{font-size:11pt;margin:10px 0 4px}p{margin:4px 0}.fig,.diff-snip{margin:8px 0}h2,h3{break-after:avoid}#all-prs,.prs-more{display:none}.part{break-before:auto!important;margin-top:20px}.dt{margin:4px 0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table{break-inside:avoid}}
+@media print{body{font-size:10pt;line-height:1.45}.doc{max-width:none;padding:0}.ws{padding-top:18px;margin-top:0}.part{break-before:page;margin-top:0}.ws-title{font-size:16pt}h3{font-size:11pt;margin:10px 0 4px}p{margin:4px 0}.fig,.diff-snip{margin:8px 0}h2,h3{break-after:avoid}#all-prs,.prs-more{display:none}.part{break-before:auto!important;margin-top:20px}.dt{margin:4px 0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table{break-inside:avoid}.fig.diff{break-inside:auto}.fig img{max-height:95mm;width:auto;max-width:100%;margin:0 auto}}
 `;
 
 export function renderRecapMarkdown(r) {

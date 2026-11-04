@@ -102,7 +102,7 @@ fs.mkdirSync(rd);
 const pr = (number, mergedAt, area) => ({ number, title: `t${number}`, url: `https://x/${number}`, mergedAt, additions: 10, deletions: 2, files: 1, area, oneLiner: `Change ${number}.` });
 fs.writeFileSync(path.join(rd, 'recap.json'), JSON.stringify({ kind: 'recap', title: 'Week', since: '2026-10-27', until: '2026-11-03', summary: 'Two things shipped.',
   prs: [pr(1, '2026-10-28T10:00:00Z', 'apps/web'), pr(2, '2026-10-30T10:00:00Z', 'packages/db'), pr(3, '2026-11-02T10:00:00Z', 'apps/web')],
-  themes: [{ title: 'Faster reads', symptom: 'Pages took seconds to open.', now: 'They open at once.', wins: ['Reads are 10x cheaper.'], body: 'Reads got cheaper.', prs: [1, 3], diagram: { nodes: [{ id: 'a', label: 'read' }, { id: 'b', label: 'cache', change: 'new' }], edges: [{ from: 'a', to: 'b' }] } }, { title: 'Schema', symptom: 'Search scanned every row.', body: 'One index.', prs: [2] }] }));
+  themes: [{ name: 'Faster reads', title: 'Reads take 40 ms, down from 2 s', symptom: 'Pages took seconds to open.', now: 'They open at once.', wins: ['Reads are 10x cheaper.'], body: 'Reads got cheaper.', prs: [1, 3], diagram: { nodes: [{ id: 'a', label: 'read' }, { id: 'b', label: 'cache', change: 'new' }], edges: [{ from: 'a', to: 'b' }] } }, { name: 'Schema', title: 'Schema checks cover all 3 tables', symptom: 'Search scanned every row.', body: 'One index.', prs: [2] }] }));
 assert.match(run('check', rd), /3 PRs, 2 workstreams, 3 days with merges/);
 const rhtml = fs.readFileSync(run('render', rd).trim(), 'utf8');
 assert.match(rhtml, /<svg class="chart"/);
@@ -110,6 +110,6 @@ assert.match(rhtml, /When it shipped/);
 assert.match(rhtml, /id="ws-2"/);
 assert.match(rhtml, /class="dg-wrap" data-view="after"/);
 assert.doesNotMatch(rhtml, /<diffs-container/);
-assert.match(run('render', rd, '--format', 'md'), /\*\*Faster reads\*\*\n\n- Before: Pages took seconds to open\./);
-assert.match(run('show', rd, '--no-color'), /\n  Faster reads\n/);
+assert.match(run('render', rd, '--format', 'md'), /\*\*Reads take 40 ms, down from 2 s\*\*\n\n- Before: Pages took seconds to open\./);
+assert.match(run('show', rd, '--no-color'), /\n  Reads take 40 ms, down from 2 s\n/);
 console.log('smoke ok');

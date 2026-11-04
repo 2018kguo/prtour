@@ -1,0 +1,135 @@
+diff --git a/README.md b/README.md
+index 170f026..6dfe792 100644
+--- a/README.md
++++ b/README.md
+@@ -421,6 +421,12 @@ total. The screen model added ~2 KiB per idle terminal (Linux, 1000
+ terminals: 11.1–12.1 → 13.4–13.6 KiB; macOS, 400: 18.7 → 20.5 KiB; idle
+ CPU unchanged).
+ 
++When an idle terminal's checkpoint is due, ptyd also compacts its emulator:
++erased rows and unused hyperlink and combining-character storage are freed.
++Meaningful screen cells and retained history stay intact. This uses the
++existing checkpoint timer, which stops after the checkpoint; active output
++does no extra compaction work.
++
+ Limits to know about when running thousands of terminals:
+ 
+ - **File descriptors:** 2 per terminal on Linux (the PTY and a pidfd), 1 on
+diff --git a/cmd/ptyd/default.pgo b/cmd/ptyd/default.pgo
+index c42a86c..68e580c 100644
+Binary files a/cmd/ptyd/default.pgo and b/cmd/ptyd/default.pgo differ
+diff --git a/go.mod b/go.mod
+index e3b5bf7..696642a 100644
+--- a/go.mod
++++ b/go.mod
+@@ -3,7 +3,7 @@ module github.com/2018kguo/ptyd
+ go 1.26.2
+ 
+ require (
+-	github.com/2018kguo/phosphor v0.1.0
++	github.com/2018kguo/phosphor v0.2.0
+ 	github.com/creack/pty v1.1.24
+ 	golang.org/x/sys v0.49.0
+ 	golang.org/x/term v0.47.0
+diff --git a/go.sum b/go.sum
+index f10f710..6266e47 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,5 +1,5 @@
+-github.com/2018kguo/phosphor v0.1.0 h1:E3MAdqNRbfeaI1mZUcA43rY10lNzF5JhPVEO9MSZA64=
+-github.com/2018kguo/phosphor v0.1.0/go.mod h1:EtEgFQ/a4qYZPduFIolWAAubXeWBjHSSHhM2B0E2MbM=
++github.com/2018kguo/phosphor v0.2.0 h1:H+O7LDg1+vPLUUFhYrE82Zu8cnZxCVShLGqiX2UtZQ0=
++github.com/2018kguo/phosphor v0.2.0/go.mod h1:EtEgFQ/a4qYZPduFIolWAAubXeWBjHSSHhM2B0E2MbM=
+ github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
+ github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
+ github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
+diff --git a/internal/client/attach_test.go b/internal/client/attach_test.go
+index 7051c6a..c41f1f0 100644
+--- a/internal/client/attach_test.go
++++ b/internal/client/attach_test.go
+@@ -117,7 +117,7 @@ func TestAttachInteractiveShell(t *testing.T) {
+ 	mgr, addr := startDaemon(t)
+ 	info, err := mgr.Create(terminal.CreateConfig{
+ 		Name: "sh", Command: "sh", Cols: 60, Rows: 10,
+-		Env: map[string]string{"PS1": "$ ", "ENV": ""},
++		Env: map[string]string{"PS1": "$ ", "ENV": "", "TERM": "xterm-256color"},
+ 	})
+ 	if err != nil {
+ 		t.Fatal(err)
+diff --git a/internal/terminal/checkpoint.go b/internal/terminal/checkpoint.go
+index 32ba207..ff5961f 100644
+--- a/internal/terminal/checkpoint.go
++++ b/internal/terminal/checkpoint.go
+@@ -254,6 +254,15 @@ func (t *terminal) settleFired() {
+ 	}
+ 	p.timer = nil
+ 	p.timerMu.Unlock()
++	// Check again while holding the screen: output may have resumed since
++	// the timer's first check. Compact before checkpoint I/O can block.
++	t.scrMu.Lock()
++	t.mu.Lock()
++	if !p.stopped && time.Since(t.lastOutputAt) >= ckptSettle {
++		t.screen.Compact()
++	}
++	t.mu.Unlock()
++	t.scrMu.Unlock()
+ 	t.checkpoint()
+ }
+ 
+diff --git a/internal/terminal/compact_test.go b/internal/terminal/compact_test.go
+new file mode 100644
+index 0000000..30fabda
+--- /dev/null
++++ b/internal/terminal/compact_test.go
+@@ -0,0 +1,51 @@
++package terminal
++
++import (
++	"bytes"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func TestIdleCheckpointKeepsScreenAndContinuation(t *testing.T) {
++	m := NewManagerWithOptions(Options{PersistDir: t.TempDir()})
++	term := fakeTerminal(m, 0, 80, 24)
++	dir := terminalDir(m.opts.PersistDir, term.info.ID)
++	if err := os.MkdirAll(dir, 0700); err != nil {
++		t.Fatal(err)
++	}
++	term.persist = &persister{dir: dir}
++	defer term.stopPersisting()
++	// Populate the backing rows, erase them, and leave both a prompt and
++	// an unfinished CSI at the boundary where output becomes quiet.
++	for range 30 {
++		term.consume([]byte("old output\r\n"))
++	}
++	term.consume([]byte("\x1b[2J\x1b[Hprompt$ \x1b[3"))
++	term.persist.stopTimer()
++	before := term.screen.Repaint(true)
++	term.mu.Lock()
++	term.lastOutputAt = time.Now().Add(-2 * ckptSettle)
++	term.mu.Unlock()
++	term.settleFired()
++	if _, err := os.Stat(filepath.Join(dir, ckptFile)); err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Equal(before, term.screen.Repaint(true)) {
++		t.Fatal("idle checkpoint changed the screen")
++	}
++	control, _, err := loadScreen(dir, 80, 24)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Equal(before, control.Repaint(true)) {
++		t.Fatal("stored idle checkpoint changed the screen")
++	}
++	suffix := []byte("1mcontinued\x1b[0m")
++	term.consume(suffix)
++	control.Write(suffix)
++	if !bytes.Equal(control.Repaint(true), term.screen.Repaint(true)) {
++		t.Fatal("idle compaction changed continued output")
++	}
++}

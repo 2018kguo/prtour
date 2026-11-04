@@ -1,0 +1,872 @@
+diff --git a/bench/README.md b/bench/README.md
+index 5386333..17868e2 100644
+--- a/bench/README.md
++++ b/bench/README.md
+@@ -48,6 +48,50 @@ threads, rings, queues and persistence. Editor screens and retained logs add
+ memory. See the [emulator comparison](https://github.com/2018kguo/phosphor/blob/main/docs/benchmarks.md)
+ for its workload conditions and remaining native leads.
+ 
++## Attached scrolling
++
++Human attachments keep a status row below the app. The client compares exact
++rendered rows, moves matching transcript rows within the app rectangle, and
++paints only the rows that changed. Keyboard and wheel responses bypass the
++background paint budget. Idle views have no periodic redraw wakeups.
++
++Six alternating A/B rounds on an Apple M5 Pro, with the same synthetic transcript
++and Go toolchain, measured these medians:
++
++| Measurement | Window | Before | After |
++|---|---|---:|---:|
++| Sequential wheel input → completed paint, p50 | 120×30 / 240×64 | 16.7 ms | 4.5 ms |
++| Sequential wheel input → completed paint, p95 | 120×30 / 240×64 | 17.4 ms | 4.6 ms |
++| Bytes sent to the viewing terminal per frame | 120×30 | 6,162 | 385 |
++| Bytes sent to the viewing terminal per frame | 240×64 | 21,242 | 729 |
++| Parse and render time per frame | 120×30 | 37.7–38.2 µs | 25.3–26.0 µs |
++| Parse and render time per frame | 240×64 | 105–110 µs | 66.7–67.7 µs |
++
++Latency includes real local PTYs, the app, daemon, TCP and the client painting
++into a host emulator. Each run sends 100 sequential wheel events, waiting for
++each synchronized frame to finish. The direct PTY control uses equal app
++dimensions and measured about 0.05–0.09 ms p50. Ptyd still adds work and output
++batching; this is a comparison with the previous attachment path, not a claim
++of direct-terminal latency. Neither case measures a GUI, GPU or physical display.
++
++The separate rendering fixture parses full transcript redraws and renders into
++the same host emulator. Timings are Go benchmark elapsed time on a shared
++workstation; ranges cover upward and downward scrolling. Emitted
++bytes include occasional full redraws when the finite transcript wraps. These
++synthetic fixtures do not establish a speedup for every terminal application.
++
++[Download the samples, source patch and fixture](https://github.com/2018kguo/ptyd/releases/download/v0.12.1/ptyd-attachment-benchmarks.tar.gz).
++The [evidence index](../docs/benchmarks.json) pins the source revisions and archive
++checksum. To compare an explicit baseline with your checkout:
++
++```sh
++BASELINE=22af6fb358221be74a35df32a86aa7d5c7eb871c
++COUNT=6 BENCHTIME=200ms OUT=.bench/paint \
++  bench/ab.sh "$BASELINE" ./internal/client '^BenchmarkPaneScroll$'
++COUNT=6 BENCHTIME=100x OUT=.bench/latency \
++  bench/ab.sh "$BASELINE" ./internal/client '^BenchmarkAttachScrollLatency$'
++```
++
+ ## Run a comparison
+ 
+ ```sh
+diff --git a/bench/ab.sh b/bench/ab.sh
+index 311bc0a..c3759e7 100755
+--- a/bench/ab.sh
++++ b/bench/ab.sh
+@@ -9,7 +9,7 @@
+ #   OUT=/tmp/ab bench/ab.sh <rev> './internal/terminal ./internal/api'
+ set -eu
+ cd "$(dirname "$0")/.."
+-rev=$1 pkgs=$2 bench=${3:-.} count=${COUNT:-10}
++rev=$1 pkgs=$2 bench=${3:-.} count=${COUNT:-10} benchtime=${BENCHTIME:-1s}
+ tmp=$(mktemp -d)
+ trap 'git worktree remove --force "$tmp/old" >/dev/null 2>&1; rm -rf "$tmp"' EXIT
+ git worktree add -q --detach "$tmp/old" "$rev"
+@@ -27,7 +27,7 @@ for i in $(seq "$count"); do
+ 	for pkg in $pkgs; do
+ 		n=$(basename "$pkg")
+ 		for v in $order; do
+-			if (cd "$pkg" && "$tmp/$v-$n.test" -test.run '^$' -test.bench "$bench" -test.benchmem -test.count 1 -test.timeout 60m) >"$tmp/run.log"; then
++			if (cd "$pkg" && "$tmp/$v-$n.test" -test.run '^$' -test.bench "$bench" -test.benchtime "$benchtime" -test.benchmem -test.count 1 -test.timeout 60m) >"$tmp/run.log"; then
+ 				sed '/^\[ptyd\]/d' "$tmp/run.log" >>"$tmp/$v.txt"
+ 			else
+ 				status=$?
+diff --git a/bench/run.sh b/bench/run.sh
+index fe22327..9de9197 100755
+--- a/bench/run.sh
++++ b/bench/run.sh
+@@ -10,6 +10,7 @@ set -eu
+ cd "$(dirname "$0")/.."
+ COUNT=${COUNT:-10}
+ BENCH=${BENCH:-.}
++BENCHTIME=${BENCHTIME:-1s}
+ bin=$(mktemp -d)
+ trap 'rm -rf "$bin"' EXIT
+ # The emulator's own benchmarks live with it, in github.com/2018kguo/phosphor.
+@@ -19,7 +20,7 @@ for p in $pkgs; do
+ done
+ for p in $pkgs; do
+ 	if (cd "$p" && "$bin/$(basename "$p").test" -test.run '^$' -test.bench "$BENCH" \
+-		-test.benchmem -test.count "$COUNT" -test.timeout 60m) >"$bin/run.log"; then
++		-test.benchtime "$BENCHTIME" -test.benchmem -test.count "$COUNT" -test.timeout 60m) >"$bin/run.log"; then
+ 		sed '/^\[ptyd\]/d' "$bin/run.log"
+ 	else
+ 		status=$?
+diff --git a/docs/benchmarks.json b/docs/benchmarks.json
+index de6b356..58fad53 100644
+--- a/docs/benchmarks.json
++++ b/docs/benchmarks.json
+@@ -7,5 +7,14 @@
+     "uncompressed_bytes": 843160,
+     "manifest": "manifest.json",
+     "current_results": "bench/native-mining"
++  },
++  "attachment_scrolling": {
++    "url": "https://github.com/2018kguo/ptyd/releases/download/v0.12.1/ptyd-attachment-benchmarks.tar.gz",
++    "sha256": "ec23352c28595bfe20fabc26e30222b6b5cdedea18f04658b10fd5ccd717d2e4",
++    "baseline_commit": "22af6fb358221be74a35df32a86aa7d5c7eb871c",
++    "source_commit": "712076b949ad955af56702fff2470004fed44304",
++    "fixture_sha256": "fcef3b1d7c563aeb2feb78e66221ac9cf0b2b3f0d22c9a46e29a344645bd2c97",
++    "rounds": 6,
++    "manifest": "manifest.json"
+   }
+ }
+diff --git a/docs/development.md b/docs/development.md
+index 0a2aa30..65e1abd 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -132,6 +132,13 @@ across detach. These checks cover different parts of the attachment path.
+ Pane tests also cover clears, alternate screens, mixed Unicode modes, palette
+ changes, retained history, narrow footers and mouse coordinates. Framed streams
+ start and recover with exact snapshots rather than ANSI reconstruction.
++Scroll checks compare every rendered cell after moves in both directions,
++identical redraws, palette changes, screen switches, restore and resize. The
++client reuses unchanged rows and the footer, and scrolls matching rows within
++the app rectangle. Input responses paint without waiting for the background
++refresh budget; idle panes have no periodic paint timer. The maintained
++[attachment benchmarks](../bench/README.md#attached-scrolling) measure emitted
++bytes, CPU work and local input-to-paint latency separately.
+ 
+ Native discovery tests cover loaded Codex threads without rollouts, original-tab
+ observations without conversation authority, same-terminal deduplication and
+diff --git a/docs/reference.md b/docs/reference.md
+index 595f0a1..d9e1767 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -263,7 +263,11 @@ indicator by clearing, scrolling or switching screens. The client draws cells
+ and preserves the app's cursor, keyboard modes, colors and links. Mouse events
+ for the status row do not reach the app. The window/tab title identifies the
+ view too. App title updates retain the ptyd prefix and hint;
+-the previous title is restored on return. `ptyd term attach --raw` forwards terminal
++the previous title is restored on return. Matching transcript rows move within
++the app rectangle instead of repainting the whole screen. Keyboard and wheel
++responses can paint immediately; background output batches at up to 120 paints
++per second, and idle views do not poll for redraws.
++`ptyd term attach --raw` forwards terminal
+ output directly without reserving a row; piped output remains raw too. The title is a view label; it does not verify
+ the current conversation after navigation inside an agent.
+ 
+diff --git a/internal/benchdata/scripts_test.go b/internal/benchdata/scripts_test.go
+index 67422d8..1210309 100644
+--- a/internal/benchdata/scripts_test.go
++++ b/internal/benchdata/scripts_test.go
+@@ -28,7 +28,7 @@ func TestBenchmarkScriptsRejectFailedSamples(t *testing.T) {
+ 				cmd := exec.Command("sh", args...)
+ 				cmd.Env = append(os.Environ(), "PATH="+filepath.Join(dir, "tools")+":"+os.Getenv("PATH"),
+ 					"SCRIPT_TEST_DIR="+dir, "SCRIPT_TEST_FAILURE="+failure, "SCRIPT_TEST_NAME="+name,
+-					"OUT="+out, "COUNT=2", "ROUNDS=2", "BENCH=Fixture", "PTYD_LOAD_PROFILE=")
++					"OUT="+out, "COUNT=2", "ROUNDS=2", "BENCH=Fixture", "BENCHTIME=100x", "PTYD_LOAD_PROFILE=")
+ 				output, err := cmd.CombinedOutput()
+ 				if failure != "" {
+ 					want := 42
+@@ -166,6 +166,16 @@ test)
+ #!/bin/sh
+ set -eu
+ label=$(basename "$0")
++case "$SCRIPT_TEST_NAME" in
++ run.sh|ab.sh)
++  found=0
++  while [ "$#" -gt 0 ]; do
++   if [ "$1" = -test.benchtime ]; then shift; [ "$1" = 100x ]; found=1; fi
++   shift
++  done
++  [ "$found" = 1 ]
++  ;;
++esac
+ case "$SCRIPT_TEST_NAME" in load.sh|load-ab.sh) label=$PTYD_LOAD_LABEL;; esac
+ printf '%s\n' "$label" >>"$SCRIPT_TEST_DIR/runs"
+ printf 'BenchmarkFixture-1 1 10 ns/op\n'
+diff --git a/internal/client/attach.go b/internal/client/attach.go
+index 9ea0a77..616ad8a 100644
+--- a/internal/client/attach.go
++++ b/internal/client/attach.go
+@@ -114,6 +114,11 @@ func Attach(ctx context.Context, opts Options, in, out *os.File, winch <-chan os
+ 	var output io.Writer = out
+ 	var frame *pane
+ 	var frameTicks <-chan time.Time
++	var frameReady <-chan struct{}
++	frameTimer := time.NewTimer(time.Hour)
++	frameTimer.Stop()
++	defer frameTimer.Stop()
++	var lastDraw time.Time
+ 	var titles *titleWriter
+ 	if isTerm && opts.Label != "" {
+ 		_, _ = io.WriteString(out, titlePush)
+@@ -123,9 +128,7 @@ func Attach(ctx context.Context, opts Options, in, out *os.File, winch <-chan os
+ 			frame.viewOnly = readOnly
+ 
+ 			output = frame
+-			tick := time.NewTicker(time.Second / 60)
+-			defer tick.Stop()
+-			frameTicks = tick.C
++			frameReady = frame.ready
+ 		} else {
+ 			titles = &titleWriter{out: out}
+ 			output = titles
+@@ -204,9 +207,20 @@ func Attach(ctx context.Context, opts Options, in, out *os.File, winch <-chan os
+ 		if len(p) == 0 || readOnly {
+ 			return nil
+ 		}
+-		return send(api.FrameInput, p)
++		if err := send(api.FrameInput, p); err != nil {
++			return err
++		}
++		// The next response to typing or scrolling should not wait behind
++		// the background-output paint budget.
++		lastDraw = time.Time{}
++		return nil
+ 	}
+ 	outputDone := (<-chan struct{})(copied)
++	drawFrame := func() error {
++		err := frame.draw(false)
++		lastDraw = time.Now()
++		return err
++	}
+ 	for {
+ 		select {
+ 		case <-ctx.Done():
+@@ -226,9 +240,25 @@ func Attach(ctx context.Context, opts Options, in, out *os.File, winch <-chan os
+ 			}
+ 			return result, nil
+ 		case <-frameTicks:
+-			if err := frame.draw(false); err != nil {
++			frameTicks = nil
++			if err := drawFrame(); err != nil {
+ 				return result, err
+ 			}
++		case <-frameReady:
++			// Paint the first output after idle immediately. While busy, merge
++			// background output at 120 paints/second without polling an idle pane.
++			if wait := time.Second/120 - time.Since(lastDraw); wait > 0 {
++				if frameTicks == nil {
++					frameTimer.Reset(wait)
++					frameTicks = frameTimer.C
++				}
++			} else {
++				frameTimer.Stop()
++				frameTicks = nil
++				if err := drawFrame(); err != nil {
++					return result, err
++				}
++			}
+ 		case <-winch:
+ 			if c, r, e := term.GetSize(int(out.Fd())); e == nil {
+ 				if frame != nil {
+diff --git a/internal/client/pane.go b/internal/client/pane.go
+index 965a43d..9402f60 100644
+--- a/internal/client/pane.go
++++ b/internal/client/pane.go
+@@ -30,10 +30,13 @@ type pane struct {
+ 	err          error
+ 	title        string
+ 	initialized  bool
++	painted      []paneRow
++	buffer       []byte
++	ready        chan struct{}
+ }
+ 
+ func newPane(out io.Writer, label string, cols, rows int) *pane {
+-	p := &pane{out: out, label: label, cols: cols, rows: rows, changed: true}
++	p := &pane{out: out, label: label, cols: cols, rows: rows, changed: true, ready: make(chan struct{}, 1)}
+ 	p.screen = phosphor.New(max(cols, 1), max(rows-1, 1), phosphor.WithBell(func() { _, p.err = io.WriteString(out, "\a") }), phosphor.WithScrollbackOutput(historyOutput{p}))
+ 	return p
+ }
+@@ -54,14 +57,23 @@ func (p *pane) Write(b []byte) (int, error) {
+ 		}
+ 	})
+ 	p.changed = true
++	p.signal()
+ 	return len(b), p.err
+ }
++
++func (p *pane) signal() {
++	select {
++	case p.ready <- struct{}{}:
++	default:
++	}
++}
+ func (p *pane) resize(cols, rows int) {
+ 	p.mu.Lock()
+ 	defer p.mu.Unlock()
+ 	p.cols, p.rows = max(cols, 1), max(rows, 2)
+ 	p.haveModes = false
+ 	p.changed = true
++	p.signal()
+ }
+ func (p *pane) draw(force bool) error {
+ 	p.mu.Lock()
+@@ -73,7 +85,7 @@ func (p *pane) draw(force bool) error {
+ 	if p.screen.Modes().SyncUpdate && !force {
+ 		return p.err
+ 	}
+-	b := []byte("\x1b[?2026h\x1b[?25l\x1b[?6l\x1b[r\x1b[?7l\x1b[4l")
++	b := append(p.buffer[:0], "\x1b[?2026h\x1b[?25l\x1b[?6l\x1b[r\x1b[?7l\x1b[4l"...)
+ 	b = appendMode(b, 2027, p.screen.Modes().GraphemeClustering)
+ 	var historyAdded bool
+ 	b, historyAdded = p.appendHistory(b)
+@@ -88,25 +100,21 @@ func (p *pane) draw(force bool) error {
+ 		view.Resize(p.cols, p.rows-1)
+ 		force = true
+ 	}
+-	for y := 0; y < p.rows-1; y++ {
+-		if !force && !view.RowDirty(y) {
+-			continue
++	b = p.appendDamage(b, view, force)
++	if force {
++		b = fmt.Appendf(b, "\x1b[%d;1H\x1b[0m\x1b[7m", p.rows)
++		state := "attached"
++		if p.viewOnly {
++			state = "viewing"
+ 		}
+-		b = fmt.Appendf(b, "\x1b[%d;1H", y+1)
+-		b = view.AppendRowANSI(b, y)
+-	}
+-	b = fmt.Appendf(b, "\x1b[%d;1H\x1b[0m\x1b[7m", p.rows)
+-	state := "attached"
+-	if p.viewOnly {
+-		state = "viewing"
+-	}
+-	if p.finished {
+-		state = "finished"
++		if p.finished {
++			state = "finished"
++		}
++		text := paneLabel(p.label, state, p.cols)
++		b = append(b, text...)
++		b = append(b, strings.Repeat(" ", max(p.cols-displayWidth(text), 0))...)
++		b = append(b, "\x1b[0m"...)
+ 	}
+-	text := paneLabel(p.label, state, p.cols)
+-	b = append(b, text...)
+-	b = append(b, strings.Repeat(" ", max(p.cols-displayWidth(text), 0))...)
+-	b = append(b, "\x1b[0m"...)
+ 	modes := p.screen.Modes()
+ 	if !p.haveModes || modes != p.lastModes {
+ 		for _, m := range []struct {
+@@ -152,6 +160,7 @@ func (p *pane) draw(force bool) error {
+ 	b = appendMode(b, 25, cur.Visible)
+ 	b = append(b, "\x1b[?2026l"...)
+ 	_, p.err = p.out.Write(b)
++	p.buffer = b
+ 	p.screen.ClearDirty()
+ 	p.changed = false
+ 	return p.err
+@@ -214,6 +223,7 @@ func (p *pane) restore(data []byte) error {
+ 	}
+ 	p.changed = true
+ 	p.haveModes = false
++	p.signal()
+ 	if !p.initialized {
+ 		p.initialized = true
+ 		return p.screen.WriteScrollback(historyOutput{p})
+@@ -289,4 +299,5 @@ func (p *pane) finish() {
+ 	p.finished = true
+ 	p.changed = true
+ 	p.haveModes = false // EOF must flush even an unfinished synchronized update.
++	p.signal()
+ }
+diff --git a/internal/client/pane_bench_test.go b/internal/client/pane_bench_test.go
+new file mode 100644
+index 0000000..87bfea0
+--- /dev/null
++++ b/internal/client/pane_bench_test.go
+@@ -0,0 +1,255 @@
++package client
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"fmt"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"slices"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/2018kguo/phosphor"
++	"github.com/2018kguo/ptyd/internal/api"
++	"github.com/2018kguo/ptyd/internal/terminal"
++	"github.com/creack/pty"
++	"golang.org/x/term"
++)
++
++// Synthetic full-screen redraws model TUIs which repaint a scrolling transcript
++// between fixed header/composer rows. The host is an emulator, not a GPU/window:
++// this measures CPU, allocations and emitted bytes, not physical display latency.
++func paneScrollFrames(cols, rows int, direction int) [][]byte {
++	frames := make([][]byte, 64)
++	for i := range frames {
++		offset := i
++		if direction < 0 {
++			offset = len(frames) - i
++		}
++		b := []byte("\x1b[?2026h\x1b[H\x1b[0mAgent transcript\x1b[K\r\n\x1b[2K\r\n")
++		for y := 2; y < rows-3; y++ {
++			b = fmt.Appendf(b, "\x1b[0m\x1b[38;2;170;180;200m%06d \x1b[0mRead project files and check the working tree. \x1b[36m雪 👩‍💻\x1b[0m\x1b[K\r\n", offset+y)
++		}
++		b = append(b, "\x1b[48;2;60;64;72m\x1b[2K > Draft a reply\r\n\x1b[2K\x1b[0m\r\n\x1b[2K\x1b[?2026l"...)
++		frames[i] = b
++	}
++	return frames
++}
++
++// This local test process behaves like a mouse-driven TUI. No agent, model or
++// user's daemon is involved. Each wheel event redraws the transcript and marks
++// a new frame; the observer waits for its synchronized update to be complete.
++func TestPaneScrollWorker(t *testing.T) {
++	if os.Getenv("PTYD_SCROLL_WORKER") != "1" {
++		t.Skip("subprocess fixture")
++	}
++	state, err := term.MakeRaw(int(os.Stdin.Fd()))
++	if err != nil {
++		os.Exit(2)
++	}
++	defer term.Restore(int(os.Stdin.Fd()), state)
++	cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
++	if err != nil {
++		os.Exit(3)
++	}
++	frames := paneScrollFrames(cols, rows, 1)
++	paint := func(i int) {
++		frame := bytes.Replace(frames[i%len(frames)], []byte("Agent transcript"), []byte(fmt.Sprintf("FRAME:%08d", i)), 1)
++		os.Stdout.Write(frame)
++	}
++	fmt.Print("\x1b[?1000h\x1b[?1006h")
++	paint(0)
++	reader := bufio.NewReader(os.Stdin)
++	for i := 1; ; i++ {
++		if _, err := reader.ReadBytes('M'); err != nil {
++			break
++		}
++		paint(i)
++	}
++	os.Exit(0)
++}
++
++// Keep the measurement fixture self-contained so the same *bench_test.go file
++// compiles against both revisions without changing their production/test code.
++type paneScrollProbe struct {
++	master, slave *os.File
++	mu            sync.Mutex
++	screen        *phosphor.Terminal
++	updated       chan struct{}
++}
++
++func waitScrollPaint(t testing.TB, u *paneScrollProbe, i int) {
++	t.Helper()
++	deadline := time.NewTimer(5 * time.Second)
++	defer deadline.Stop()
++	for {
++		u.mu.Lock()
++		painted := strings.HasPrefix(u.screen.Line(0), fmt.Sprintf("FRAME:%08d", i)) && !u.screen.Modes().SyncUpdate
++		u.mu.Unlock()
++		if painted {
++			return
++		}
++		select {
++		case <-u.updated:
++		case <-deadline.C:
++			t.Fatalf("scroll frame %d did not finish painting", i)
++		}
++	}
++}
++
++func scrollTerminal(t testing.TB, cols, rows int, framed bool) *paneScrollProbe {
++	t.Helper()
++	binary, err := os.Executable()
++	if err != nil {
++		t.Fatal(err)
++	}
++	master, slave, err := pty.Open()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := pty.Setsize(master, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
++		master.Close()
++		slave.Close()
++		t.Fatal(err)
++	}
++	u := &paneScrollProbe{master: master, slave: slave, screen: phosphor.New(cols, rows), updated: make(chan struct{}, 1)}
++	go func() {
++		buf := make([]byte, 8192)
++		for {
++			n, err := master.Read(buf)
++			u.mu.Lock()
++			u.screen.Write(buf[:n])
++			u.mu.Unlock()
++			select {
++			case u.updated <- struct{}{}:
++			default:
++			}
++			if err != nil {
++				return
++			}
++		}
++	}()
++	t.Cleanup(func() { master.Close(); slave.Close() })
++	if !framed {
++		cmd := exec.Command(binary, "-test.run=^TestPaneScrollWorker$")
++		cmd.Env = append(os.Environ(), "PTYD_SCROLL_WORKER=1")
++		cmd.Stdin, cmd.Stdout, cmd.Stderr = u.slave, u.slave, u.slave
++		if err := cmd.Start(); err != nil {
++			t.Fatal(err)
++		}
++		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
++	} else {
++		mgr := terminal.NewManager()
++		server := httptest.NewServer(api.New(mgr, api.Config{Token: "tok"}).Handler())
++		t.Cleanup(func() { mgr.CloseAll(); server.Close() })
++		addr := strings.TrimPrefix(server.URL, "http://")
++		info, err := mgr.Create(terminal.CreateConfig{Name: "scroll fixture", Command: binary, Args: []string{"-test.run=^TestPaneScrollWorker$"}, Cols: uint16(cols), Rows: uint16(rows - 1), Env: map[string]string{"PTYD_SCROLL_WORKER": "1"}})
++		if err != nil {
++			t.Fatal(err)
++		}
++		ctx, cancel := context.WithCancel(context.Background())
++		done := make(chan error, 1)
++		go func() {
++			_, err := Attach(ctx, Options{Addr: addr, Token: "tok", ID: string(info.ID), Label: "scroll witness"}, u.slave, u.slave, nil)
++			done <- err
++		}()
++		t.Cleanup(func() {
++			cancel()
++			select {
++			case err := <-done:
++				if err != nil {
++					t.Error(err)
++				}
++			case <-time.After(5 * time.Second):
++				t.Error("scroll attachment did not stop")
++			}
++		})
++	}
++	waitScrollPaint(t, u, 0)
++	return u
++}
++
++// Real local PTY input -> app -> (daemon/TCP/pane for framed) -> host emulator.
++// This includes batching and paint scheduling but excludes a GUI's GPU/display.
++// Direct and framed views give the app identical dimensions (the latter adds
++// the persistent status row). Sequential events model continuous scrolling.
++func BenchmarkAttachScrollLatency(b *testing.B) {
++	for _, size := range [][2]int{{120, 30}, {240, 64}} {
++		for _, framed := range []bool{false, true} {
++			b.Run(fmt.Sprintf("%dx%d/framed%t", size[0], size[1], framed), func(b *testing.B) {
++				rows := size[1] - 1
++				if framed {
++					rows++
++				}
++				u := scrollTerminal(b, size[0], rows, framed)
++				samples := make([]time.Duration, 0, b.N)
++				b.ResetTimer()
++				for i := 1; i <= b.N; i++ {
++					start := time.Now()
++					if _, err := u.master.Write([]byte("\x1b[<65;5;5M")); err != nil {
++						b.Fatal(err)
++					}
++					waitScrollPaint(b, u, i)
++					samples = append(samples, time.Since(start))
++				}
++				b.StopTimer()
++				slices.Sort(samples)
++				b.ReportMetric(float64(samples[len(samples)/2])/float64(time.Millisecond), "p50-ms")
++				b.ReportMetric(float64(samples[(len(samples)-1)*95/100])/float64(time.Millisecond), "p95-ms")
++			})
++		}
++	}
++}
++
++type paneBenchHost struct {
++	screen *phosphor.Terminal
++	bytes  int64
++}
++
++func (h *paneBenchHost) Write(b []byte) (int, error) {
++	h.bytes += int64(len(b))
++	return h.screen.Write(b)
++}
++
++func BenchmarkPaneScroll(b *testing.B) {
++	for _, size := range [][2]int{{120, 30}, {240, 64}} {
++		for _, direction := range []int{1, -1} {
++			name := fmt.Sprintf("%dx%d/direction%d", size[0], size[1], direction)
++			frames := paneScrollFrames(size[0], size[1]-1, direction)
++			b.Run(name+"/direct", func(b *testing.B) {
++				h := &paneBenchHost{screen: phosphor.New(size[0], size[1]-1)}
++				h.Write(frames[0])
++				h.bytes = 0
++				b.ReportAllocs()
++				b.ResetTimer()
++				for i := 0; i < b.N; i++ {
++					h.Write(frames[i%len(frames)])
++				}
++				b.StopTimer()
++				b.ReportMetric(float64(h.bytes)/float64(b.N), "wire-B/frame")
++			})
++			b.Run(name+"/framed", func(b *testing.B) {
++				h := &paneBenchHost{screen: phosphor.New(size[0], size[1])}
++				p := newPane(h, "group / agent", size[0], size[1])
++				p.Write(frames[0])
++				p.draw(false)
++				h.bytes = 0
++				b.ReportAllocs()
++				b.ResetTimer()
++				for i := 0; i < b.N; i++ {
++					p.Write(frames[i%len(frames)])
++					if err := p.draw(false); err != nil {
++						b.Fatal(err)
++					}
++				}
++				b.StopTimer()
++				b.ReportMetric(float64(h.bytes)/float64(b.N), "wire-B/frame")
++			})
++		}
++	}
++}
+diff --git a/internal/client/pane_damage.go b/internal/client/pane_damage.go
+new file mode 100644
+index 0000000..a6519ed
+--- /dev/null
++++ b/internal/client/pane_damage.go
+@@ -0,0 +1,125 @@
++package client
++
++import (
++	"bytes"
++	"fmt"
++
++	"github.com/2018kguo/phosphor"
++)
++
++// Keep separate buffers for the last painted row and its replacement. Comparing
++// exact rendered bytes includes colors, hyperlinks and Unicode join modes.
++type paneRow struct {
++	previous, next []byte
++	changed        bool
++}
++
++func (r paneRow) current() []byte {
++	if r.changed {
++		return r.next
++	}
++	return r.previous
++}
++
++type paneScroll struct {
++	top, bottom, offset int // half-open region; positive offset scrolls up
++}
++
++func (s paneScroll) source(y int) int {
++	if y < s.top || y >= s.bottom {
++		return y
++	}
++	if source := y + s.offset; source >= s.top && source < s.bottom {
++		return source
++	}
++	return -1 // Newly exposed rows must be painted, including styled blanks.
++}
++
++func (p *pane) appendDamage(b []byte, view *phosphor.Terminal, force bool) []byte {
++	_, height := view.Size()
++	if len(p.painted) != height {
++		p.painted = make([]paneRow, height)
++		force = true
++	}
++	for y := range p.painted {
++		r := &p.painted[y]
++		r.changed = force || view.RowDirty(y)
++		if r.changed {
++			r.next = view.AppendRowANSI(r.next[:0], y)
++		}
++	}
++	var scroll paneScroll
++	if !force {
++		scroll = choosePaneScroll(p.painted)
++	}
++	if scroll.offset != 0 {
++		direction := 'S'
++		if scroll.offset < 0 {
++			direction = 'T'
++		}
++		b = fmt.Appendf(b, "\x1b[0m\x1b[%d;%dr\x1b[%d%c\x1b[r", scroll.top+1, scroll.bottom, max(scroll.offset, -scroll.offset), direction)
++	}
++	for y, r := range p.painted {
++		source := scroll.source(y)
++		if !force && source >= 0 && bytes.Equal(r.current(), p.painted[source].previous) {
++			continue
++		}
++		b = fmt.Appendf(b, "\x1b[%d;1H", y+1)
++		b = append(b, r.current()...)
++	}
++	for i := range p.painted {
++		r := &p.painted[i]
++		if r.changed {
++			r.previous, r.next = r.next, r.previous
++		}
++	}
++	return b
++}
++
++// Try small wheel/keyboard scrolls in both directions. An exact matching run
++// can move in the host terminal instead of retransmitting its rows. Limit the
++// search work, and only use a move when its total byte cost beats repainting.
++func choosePaneScroll(rows []paneRow) paneScroll {
++	best := paneScroll{}
++	bestCost := panePaintCost(rows, best)
++	if bestCost == 0 {
++		return best
++	}
++	for offset := -min(16, len(rows)-1); offset <= min(16, len(rows)-1); offset++ {
++		if offset == 0 {
++			continue
++		}
++		start, longest, length := 0, 0, 0
++		for y := max(-offset, 0); y < min(len(rows)-offset, len(rows)); y++ {
++			if bytes.Equal(rows[y].current(), rows[y+offset].previous) {
++				length++
++				if length > longest {
++					start, longest = y-length+1, length
++				}
++			} else {
++				length = 0
++			}
++		}
++		if longest < 3 {
++			continue
++		}
++		s := paneScroll{top: min(start, start+offset), bottom: max(start+longest, start+longest+offset), offset: offset}
++		// Covers region setup/reset and scroll command; row positions are a
++		// conservative fixed allowance rather than another serialization pass.
++		if cost := panePaintCost(rows, s) + 40; cost < bestCost {
++			best, bestCost = s, cost
++		}
++	}
++	return best
++}
++
++func panePaintCost(rows []paneRow, scroll paneScroll) int {
++	cost := 0
++	for y, row := range rows {
++		source := scroll.source(y)
++		if source < 0 || !bytes.Equal(row.current(), rows[source].previous) {
++			cost += len(row.current()) + 12
++		}
++	}
++	return cost
++}
+diff --git a/internal/client/pane_test.go b/internal/client/pane_test.go
+index 13fa0ea..3c80422 100644
+--- a/internal/client/pane_test.go
++++ b/internal/client/pane_test.go
+@@ -361,3 +361,104 @@ func TestFinishedPaneFlushesUnfinishedSynchronizedUpdate(t *testing.T) {
+ 		t.Fatalf("final error hidden: %q / %q", screen.Line(0), screen.Line(23))
+ 	}
+ }
++
++func TestPaneScrollDamagePreservesRenderedState(t *testing.T) {
++	for _, width := range []int{40, 120} {
++		t.Run(strconv.Itoa(width), func(t *testing.T) {
++			var wire bytes.Buffer
++			p := newPane(&wire, "group / transcript", width, 24)
++			host := phosphor.New(width, 24, phosphor.WithScrollback(200))
++			check := func() {
++				t.Helper()
++				if err := p.draw(false); err != nil {
++					t.Fatal(err)
++				}
++				host.Write(wire.Bytes())
++				app := p.screen
++				cols, rows := app.Size()
++				for y := 0; y < rows; y++ {
++					for x := 0; x < cols; x++ {
++						want, got := app.Cell(x, y), host.Cell(x, y)
++						for _, c := range []*phosphor.Cell{&want, &got} {
++							if c.Rune == 0 && c.Width != 0 {
++								c.Rune = ' '
++							}
++						}
++						// Program palette changes are emitted as RGB, so compare the
++						// displayed colors as well as attributes and cluster structure.
++						for _, pair := range []struct {
++							cell    *phosphor.Cell
++							palette phosphor.Palette
++							reverse bool
++						}{{&want, app.Palette(), app.Modes().ReverseVideo}, {&got, host.Palette(), host.Modes().ReverseVideo}} {
++							fg, bg := pair.palette.Resolve(pair.cell.Style.Fg, false), pair.palette.Resolve(pair.cell.Style.Bg, true)
++							if (pair.cell.Style.Attrs&phosphor.AttrInverse != 0) != pair.reverse {
++								fg, bg = bg, fg
++							}
++							pair.cell.Style.Attrs &^= phosphor.AttrInverse
++							pair.cell.Style.Fg = phosphor.RGBColor(fg.R, fg.G, fg.B)
++							pair.cell.Style.Bg = phosphor.RGBColor(bg.R, bg.G, bg.B)
++						}
++						if want != got {
++							t.Fatalf("cell %d,%d: got %+v want %+v", x, y, got, want)
++						}
++					}
++				}
++				if want, got := app.Cursor(), host.Cursor(); want.X != got.X || want.Y != got.Y || want.Visible != got.Visible {
++					t.Fatalf("cursor got %+v want %+v", got, want)
++				}
++				if !strings.Contains(host.Line(rows), "jk: back") {
++					t.Fatal("scroll damaged the footer")
++				}
++			}
++			paint := func(offset int) {
++				var b strings.Builder
++				b.WriteString("\x1b[?2026h")
++				for y := 0; y < 23; y++ {
++					id := y + offset
++					if y < 2 || y >= 20 {
++						id = y
++					}
++					fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0m\x1b[48;2;%d;30;40m\x1b[2K\x1b[4:3;31m", y+1, 20+id%20)
++					if id%5 != 0 {
++						fmt.Fprintf(&b, "\x1b]8;id=row%d;https://example.com/%d\x1b\\line %03d \x1b[?2027h雪 👩‍💻 é\x1b[?2027l\x1b]8;;\x1b\\", id, id, id)
++					}
++				}
++				b.WriteString("\x1b[0m\x1b[22;5H\x1b[?2026l")
++				p.Write([]byte(b.String()))
++			}
++			up, down := false, false
++			for _, offset := range []int{0, 1, 2, 5, 21, 5, 2, 1, 0, 1, 2} {
++				paint(offset)
++				check()
++				up = up || strings.Contains(wire.String(), "S\x1b[r")
++				down = down || strings.Contains(wire.String(), "T\x1b[r")
++				wire.Reset()
++			}
++			if !up || !down {
++				t.Fatal("fixture did not exercise scroll moves in both directions")
++			}
++			paint(2)
++			check()
++			if strings.Contains(wire.String(), "line ") || strings.Contains(wire.String(), "jk: back") {
++				t.Fatal("identical redraw retransmitted unchanged rows or footer")
++			}
++			wire.Reset()
++			saved := p.screen.Snapshot()
++			for _, write := range []string{"\x1b]4;1;#aabbcc\x1b\\", "\x1b[?1049h\x1b[2Jalternate", "\x1b[?1049l", "\x1b[?5h", "\x1b[?5l"} {
++				p.Write([]byte(write))
++				check()
++				wire.Reset()
++			}
++			if err := p.restore(saved); err != nil {
++				t.Fatal(err)
++			}
++			check()
++			wire.Reset()
++			p.resize(width+4, 26)
++			p.screen.Resize(width+4, 25)
++			host.Resize(width+4, 26)
++			check()
++		})
++	}
++}

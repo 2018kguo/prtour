@@ -1,0 +1,220 @@
+diff --git a/internal/terminal/manager.go b/internal/terminal/manager.go
+index 82fed60..a34e3cd 100644
+--- a/internal/terminal/manager.go
++++ b/internal/terminal/manager.go
+@@ -1457,6 +1457,7 @@ func (t *terminal) processPending() time.Duration {
+ // fireLocked records an attention event for every watch matching line,
+ // keeping only the newest maxAttention events. Caller holds t.mu.
+ func (t *terminal) fireLocked(line Line) {
++	cloned := false
+ 	for _, w := range t.watches {
+ 		if w.spec.Once && w.fired {
+ 			continue
+@@ -1465,6 +1466,11 @@ func (t *terminal) fireLocked(line Line) {
+ 			continue
+ 		}
+ 		w.fired = true
++		if !cloned {
++			// Ring lines alias a shared text arena; an event can
++			// outlive the line, so it keeps only its own text.
++			line.Text, cloned = strings.Clone(line.Text), true
++		}
+ 		t.attention = append(t.attention, AttentionEvent{Watch: w.spec.Name, Line: line, At: time.Now()})
+ 		if n := len(t.attention); n > maxAttention {
+ 			t.attention = append(t.attention[:0], t.attention[n-maxAttention:]...)
+diff --git a/internal/terminal/ring.go b/internal/terminal/ring.go
+index 3f5eb68..b02b77c 100644
+--- a/internal/terminal/ring.go
++++ b/internal/terminal/ring.go
+@@ -2,9 +2,11 @@ package terminal
+ 
+ import (
+ 	"bytes"
++	"math/bits"
+ 	"sync"
+ 	"time"
+ 	"unicode/utf8"
++	"unsafe"
+ )
+ 
+ // maxLineBytes caps a single line. Output with no newline (a spinner drawn
+@@ -47,6 +49,13 @@ type Ring struct {
+ 	// once, at its first line (zero outside Write).
+ 	now time.Time
+ 
++	// text is the arena committed lines' stripped text is appended to.
++	// Line.Text aliases it: bytes below len are written once and never
++	// changed, so only text[len:cap] is writable, and a full arena is
++	// replaced rather than reused. The garbage collector frees an old
++	// arena once no retained or handed-out line refers to it.
++	text []byte
++
+ 	pending   []byte // partial line being built (no newline yet)
+ 	pendingCR bool   // last byte was a bare '\r' awaiting disambiguation
+ 
+@@ -262,7 +271,7 @@ func (r *Ring) commitLocked(text []byte) {
+ 		at = time.Now()
+ 		r.now = at
+ 	}
+-	line := Line{Seq: r.nextSeq, Text: stripANSIBytes(text), At: at}
++	line := Line{Seq: r.nextSeq, Text: r.internLocked(text), At: at}
+ 	r.nextSeq++
+ 
+ 	cost := len(line.Text) + lineOverhead
+@@ -283,6 +292,40 @@ func (r *Ring) commitLocked(text []byte) {
+ 	r.bytes += cost
+ }
+ 
++// Arena sizing: a new arena holds about 1/16 of the retained bytes,
++// rounded down to a power of two within these bounds, so its unused tail and a partly evicted oldest arena
++// stay small next to the retained text while a busy ring allocates once
++// per many lines rather than once per line.
++const (
++	minTextArena = 256
++	maxTextArena = 32 << 10
++)
++
++// internLocked returns text with ANSI escape sequences stripped, as a
++// string in the arena.
++func (r *Ring) internLocked(text []byte) string {
++	if len(text) == 0 {
++		return ""
++	}
++	// Power-of-two sizes match the allocator's size classes, so arenas
++	// share spans instead of each leaving one mostly empty.
++	size := min(max(minTextArena, 1<<(bits.Len(uint(r.bytes/16)|1)-1)), maxTextArena)
++	if len(text) > size/4 {
++		// A long line gets its own allocation so it never strands a
++		// large unused arena tail.
++		return stripANSIBytes(text)
++	}
++	if cap(r.text)-len(r.text) < len(text) {
++		r.text = make([]byte, 0, size)
++	}
++	start := len(r.text)
++	r.text = appendStripANSI(r.text, text)
++	if len(r.text) == start {
++		return ""
++	}
++	return unsafe.String(&r.text[start], len(r.text)-start)
++}
++
+ // indexAfterLocked returns the position (0 = oldest retained) of the first
+ // line with Seq > sinceSeq, or r.n if there is none. Seqs are contiguous,
+ // so this is arithmetic, not a scan.
+diff --git a/internal/terminal/ring_arena_test.go b/internal/terminal/ring_arena_test.go
+new file mode 100644
+index 0000000..e774e70
+--- /dev/null
++++ b/internal/terminal/ring_arena_test.go
+@@ -0,0 +1,65 @@
++package terminal
++
++import (
++	"fmt"
++	"strings"
++	"testing"
++	"unsafe"
++)
++
++// Lines handed out alias the ring's text arena; later writes, evictions
++// and compaction must never change their text.
++func TestRingArenaTextIsImmutable(t *testing.T) {
++	r := NewRing(64, 4<<10)
++	var held []Line
++	var want []string
++	for i := range 2000 {
++		text := fmt.Sprintf("\x1b[3%dmline %d %s\x1b[0m", i%8, i, strings.Repeat("z", i%97))
++		r.Write([]byte(text + "\r\n"))
++		if i%37 == 0 {
++			l := r.Snapshot(-1, 1).Lines[0]
++			held = append(held, l)
++			want = append(want, stripANSI(text))
++		}
++		if i%101 == 0 {
++			r.Compact()
++		}
++	}
++	for i, l := range held {
++		if l.Text != want[i] {
++			t.Fatalf("held line %d changed: %q, want %q", l.Seq, l.Text, want[i])
++		}
++	}
++}
++
++// Short lines share arena allocations instead of allocating one each.
++func TestRingArenaSharesAllocations(t *testing.T) {
++	r := newBenchRing()
++	chunk := []byte(strings.Repeat("a short log line\r\n", 400))
++	r.Write(chunk) // grow slots and the arena
++	if n := testing.AllocsPerRun(20, func() { r.Write(chunk) }); n > 20 {
++		t.Fatalf("400 short lines allocated %.0f times", n)
++	}
++}
++
++// Attention events outlive ring lines, so they must not pin the arena.
++func TestAttentionDoesNotAliasArena(t *testing.T) {
++	term := fakeTerminal(NewManager(), 0, 80, 24)
++	watches, err := compileWatches([]WatchSpec{{Name: "hit", Pattern: "hit"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	term.watches = watches
++	term.ring.Write([]byte("a hit here\n"))
++	line := term.ring.Snapshot(-1, 1).Lines[0]
++	term.processLine(line)
++	term.mu.Lock()
++	got := term.attention[len(term.attention)-1].Line.Text
++	term.mu.Unlock()
++	if got != line.Text {
++		t.Fatalf("attention text %q, want %q", got, line.Text)
++	}
++	if unsafe.StringData(got) == unsafe.StringData(line.Text) {
++		t.Fatal("attention event aliases the ring arena")
++	}
++}
+diff --git a/internal/terminal/scale_test.go b/internal/terminal/scale_test.go
+index 20f1252..4f9e3de 100644
+--- a/internal/terminal/scale_test.go
++++ b/internal/terminal/scale_test.go
+@@ -250,6 +250,10 @@ func FuzzStripANSI(f *testing.F) {
+ 		if got != want {
+ 			t.Fatalf("stripANSIBytes(%q) = %q, regexp gives %q", in, got, want)
+ 		}
++		// The arena form appends the same text after what dst holds.
++		if got := appendStripANSI([]byte("dst"), []byte(in)); string(got) != "dst"+want {
++			t.Fatalf("appendStripANSI(%q) = %q, regexp gives %q", in, got[3:], want)
++		}
+ 	})
+ }
+ 
+diff --git a/internal/terminal/types.go b/internal/terminal/types.go
+index ff1c68b..39ee24f 100644
+--- a/internal/terminal/types.go
++++ b/internal/terminal/types.go
+@@ -55,6 +55,25 @@ func stripANSIBytes(p []byte) string {
+ 	return stripANSI(unsafe.String(unsafe.SliceData(p), len(p)))
+ }
+ 
++// appendStripANSI appends p with stripANSI's escape sequences removed to
++// dst. It never appends more than len(p) bytes.
++func appendStripANSI(dst, p []byte) []byte {
++	for {
++		i := bytes.IndexByte(p, 0x1b)
++		if i < 0 {
++			return append(dst, p...)
++		}
++		dst = append(dst, p[:i]...)
++		p = p[i:]
++		n := escapeLen(unsafe.String(unsafe.SliceData(p), len(p)))
++		if n == 0 {
++			dst = append(dst, p[0]) // not a sequence: keep the ESC
++			n = 1
++		}
++		p = p[n:]
++	}
++}
++
+ // escapeLen returns the length of the escape sequence at the start of s
+ // (s[0] is ESC), or 0 if s does not start with one.
+ func escapeLen(s string) int {

@@ -1,0 +1,1150 @@
+diff --git a/README.md b/README.md
+index d5ad649..2bd2b70 100644
+--- a/README.md
++++ b/README.md
+@@ -46,7 +46,9 @@ press **v** to pin a terminal beside the list. Pin up to three to follow several
+ agents at once while moving between them. Pins survive leaving and reopening
+ the browser. Previews keep
+ application colors and backgrounds; smaller windows stack the preview below
+-the list. Finished screens stay available without being restarted.
++the list. Previews keep application footers and input boxes in view. Pane edges
++show when rows above or columns to the right are hidden; Enter opens the terminal.
++Finished screens stay available without being restarted.
+ 
+ Use `ptyd ls --plain` for a table that exits, or `--json` for structured output.
+ Piped output stays plain text. Older ungrouped terminals live in
+diff --git a/cmd/ptyd/workspace.go b/cmd/ptyd/workspace.go
+index 458b8d3..e9726de 100644
+--- a/cmd/ptyd/workspace.go
++++ b/cmd/ptyd/workspace.go
+@@ -73,6 +73,7 @@ type workspaceView struct {
+ 	searchBefore            string
+ 	motion                  bool
+ 	brandPhase              int
++	theme                   workspaceTheme
+ }
+ 
+ func (v workspaceView) groupInfo() (terminal.GroupSummary, bool) {
+@@ -382,7 +383,7 @@ func workspace(c client.API, start terminal.GroupID, initial terminal.ID, in, ou
+ 	_, _ = io.WriteString(out, "\x1b[22;0t"+statusEnter)
+ 	history := start != "" || (len(showHistory) > 0 && showHistory[0])
+ 	layouts := loadWorkspaceLayouts(c.Addr)
+-	v := workspaceView{pins: layouts.pins, motion: os.Getenv("PTYD_REDUCED_MOTION") == "", notice: layouts.notice, history: history, group: start, selected: string(initial), color: os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"}
++	v := workspaceView{theme: workspaceThemeFor(colors), pins: layouts.pins, motion: os.Getenv("PTYD_REDUCED_MOTION") == "", notice: layouts.notice, history: history, group: start, selected: string(initial), color: os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"}
+ 	queries := make(chan workspaceQuery, 1)
+ 	updates := make(chan workspaceSnapshot, 1)
+ 	go refreshWorkspace(ctx, c, queries, updates)
+diff --git a/cmd/ptyd/workspace_navigation.go b/cmd/ptyd/workspace_navigation.go
+index 3a9ae33..5a3afc4 100644
+--- a/cmd/ptyd/workspace_navigation.go
++++ b/cmd/ptyd/workspace_navigation.go
+@@ -54,7 +54,7 @@ func (v *workspaceView) togglePin(id terminal.ID) {
+ 		v.pins = map[terminal.GroupID][]terminal.ID{}
+ 	}
+ 	v.pins[v.group] = append(v.pins[v.group], id)
+-	v.notice = "Pane pinned. Select another terminal to watch both."
++	v.notice = "Pane pinned."
+ }
+ func (v *workspaceView) enterGroup(id terminal.GroupID) {
+ 	if v.group == "" {
+diff --git a/cmd/ptyd/workspace_preview.go b/cmd/ptyd/workspace_preview.go
+index 2dd7695..91772ac 100644
+--- a/cmd/ptyd/workspace_preview.go
++++ b/cmd/ptyd/workspace_preview.go
+@@ -13,9 +13,12 @@ type workspaceRect struct{ x, y, w, h int }
+ 
+ // Preview rows are staged off-screen with Phosphor's canonical renderer.
+ // Chrome is painted after this layer, so clusters never erase neighboring UI.
+-func workspacePreviewLayer(out *strings.Builder, view *phosphor.Terminal, r workspaceRect, color bool, hostCols int) {
++func workspacePreviewLayer(out *strings.Builder, view *phosphor.Terminal, r workspaceRect, color bool, hostCols int) int {
++	if r.w < 1 || r.h < 1 {
++		return 0
++	}
+ 	cols, rows := view.Size()
+-	first := min(max(view.Cursor().Y-r.h+1, 0), max(rows-r.h, 0))
++	first := workspacePreviewStart(view, r.h)
+ 	for y := 0; y < r.h && first+y < rows; y++ {
+ 		row := phosphor.New(cols, 1, phosphor.WithScrollback(0))
+ 		row.Write(view.AppendRowANSI(nil, first+y))
+@@ -40,6 +43,44 @@ func workspacePreviewLayer(out *strings.Builder, view *phosphor.Terminal, r work
+ 		out.Write(data)
+ 	}
+ 	out.WriteString("\x1b[0m\x1b[0\"q\x1b]8;;\x1b\\\x1b[?2027l\x1b[?7l")
++	return first
++}
++
++// Full-screen apps draw footers and input-box backgrounds below the cursor.
++// Keep their last painted row in view, while sparse shells stay near the top.
++func workspacePreviewStart(view *phosphor.Terminal, height int) int {
++	cols, rows := view.Size()
++	if height >= rows {
++		return 0
++	}
++	last := view.Cursor().Y
++scan:
++	for y := rows - 1; y > last; y-- {
++		for x := 0; x < cols; x++ {
++			c := view.Cell(x, y)
++			if workspacePaintedCell(c) {
++				last = y
++				break scan
++			}
++		}
++	}
++	return min(max(last-max(height, 1)+1, 0), max(rows-max(height, 1), 0))
++}
++
++func workspacePaintedCell(c phosphor.Cell) bool {
++	return c.Width == 0 || (c.Rune != 0 && c.Rune != ' ') || c.Combining != "" || c.Style.Bg != phosphor.DefaultColor || c.Style.Underline != phosphor.UnderlineNone || c.Style.Attrs&(phosphor.AttrInverse|phosphor.AttrStrikethrough|phosphor.AttrOverline) != 0
++}
++
++func workspacePreviewRight(view *phosphor.Terminal, r workspaceRect, first int) int {
++	cols, rows := view.Size()
++	for x := cols - 1; x >= r.w; x-- {
++		for y := first; y < min(first+r.h, rows); y++ {
++			if workspacePaintedCell(view.Cell(x, y)) {
++				return x - r.w + 1
++			}
++		}
++	}
++	return 0
+ }
+ 
+ func workspaceHome(out *strings.Builder, v workspaceView, cols, rows int, put func(int, int, string, string), line func(int)) {
+@@ -62,7 +103,14 @@ func workspaceHome(out *strings.Builder, v workspaceView, cols, rows int, put fu
+ 	} else {
+ 		put(2, 3, summary, "36")
+ 	}
++	left := cols
++	if cols >= 96 {
++		left = min(max(cols/3, 30), 42)
++	}
+ 	line(4)
++	if left < cols {
++		workspaceBox(workspaceRect{1, 4, left, rows - 9}, "2", put)
++	}
+ 	put(2, 4, " GROUPS ", "1;36")
+ 	if v.snapshot == nil && v.err == nil {
+ 		put(4, 6, "Finding your groups…", "36")
+@@ -80,11 +128,7 @@ func workspaceHome(out *strings.Builder, v workspaceView, cols, rows int, put fu
+ 		}
+ 		return
+ 	}
+-	left := cols
+-	if cols >= 96 {
+-		left = min(max(cols/3, 30), 42)
+-	}
+-	available := max((rows-11)/2, 1)
++	available := max((rows-12)/2, 1)
+ 	if left == cols {
+ 		available = min(len(gs), min(available, max((rows-22)/2, 1)))
+ 	}
+@@ -94,7 +138,7 @@ func workspaceHome(out *strings.Builder, v workspaceView, cols, rows int, put fu
+ 		y := 6 + (i-start)*2
+ 		mark, style := "  ", "1"
+ 		if string(g.ID) == v.selected {
+-			mark, style = "› ", "1;7"
++			mark, style = "› ", v.theme.selected()
+ 		}
+ 		name := g.Name
+ 		if g.Archived {
+@@ -117,12 +161,8 @@ func workspaceHome(out *strings.Builder, v workspaceView, cols, rows int, put fu
+ 	}
+ 	selected := gs[min(v.index(), len(gs)-1)]
+ 	put(2, rows-4, friendlyCWD(selected.CWD), "2")
+-	put(2, rows-3, "Enter opens · jk back · r rename · a archive · x remove", "2")
+ 	x, y, w, h := left+3, 6, cols-left-6, rows-12
+ 	if left < cols {
+-		for yy := 5; yy < rows-5; yy++ {
+-			put(left, yy, "│", "2")
+-		}
+ 		put(left+2, 4, " WORKSPACE PREVIEW ", "1;36")
+ 	} else {
+ 		x, y, w = 3, 7+available*2, cols-6
+@@ -156,14 +196,16 @@ func workspaceHome(out *strings.Builder, v workspaceView, cols, rows int, put fu
+ 	}
+ 	y += shown + 1
+ 	h -= shown + 1
+-	if h < 2 {
++	if h < 3 {
+ 		return
+ 	}
+-	put(x, y, "LIVE PREVIEW · read only", "2")
+-	y += 2
+-	h -= 2
+-	if v.snapshot.Preview != nil {
+-		workspacePreviewLayer(out, v.snapshot.Preview, workspaceRect{x, y, w, max(h, 1)}, v.color, cols)
++	if v.snapshot.PreviewID != "" {
++		for _, row := range v.snapshot.Overview.Sessions {
++			if string(row.ID) == v.snapshot.PreviewID {
++				workspacePreviewPane(out, v, workspacePinnedPreview{Row: row, Screen: v.snapshot.Preview, Err: v.snapshot.PreviewErr}, workspaceRect{x, y, w, h}, cols, put)
++				break
++			}
++		}
+ 	} else if v.snapshot.PreviewErr != nil {
+ 		put(x, y, "Preview unavailable: "+v.snapshot.PreviewErr.Error(), "33")
+ 	} else {
+diff --git a/cmd/ptyd/workspace_render.go b/cmd/ptyd/workspace_render.go
+index 07cd2a2..166cb1d 100644
+--- a/cmd/ptyd/workspace_render.go
++++ b/cmd/ptyd/workspace_render.go
+@@ -35,19 +35,13 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 		heading = g.Name
+ 	}
+ 	put(2, 1, "ptyd", "1;36")
+-	put(8, 1, "/  "+heading, "1")
++	headingWidth := cols - workspaceBrandReserve(cols) - 10
++	if cols >= 96 {
++		headingWidth = min(headingWidth, cols/2-10)
++	}
++	put(8, 1, clipStatus("/  "+heading, headingWidth), "1")
+ 	title := "ptyd · " + heading
+ 	fmt.Fprintf(&out, "\x1b]2;%s\x1b\\", displayText(title, 160))
+-	footer := "j/k preview   Enter open   n new group   / search   jk back   ? help   q quit"
+-	if v.group != "" {
+-		footer = "j/k select   Enter open   v pin pane   n new   jk back   ? help   q quit"
+-	}
+-	if cols < 96 {
+-		footer = "j/k  Enter  n new  jk back  ?  q quit"
+-		if v.group != "" {
+-			footer = "j/k  Enter  v pin  jk back  ?  q quit"
+-		}
+-	}
+ 	if v.group == "" {
+ 		workspaceHome(&preview, v, cols, rows, put, line)
+ 	} else {
+@@ -58,7 +52,11 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 			if g.Attention > 0 {
+ 				summary += fmt.Sprintf("  ·  %d need attention", g.Attention)
+ 			}
+-			put(max(cols-textWidth(summary)-workspaceBrandReserve(cols)-3, 2), 1, summary, "36")
++			if cols >= 96 {
++				put(max(cols-textWidth(summary)-workspaceBrandReserve(cols)-3, cols/2), 1, clipStatus(summary, cols/2-workspaceBrandReserve(cols)-3), "36")
++			} else {
++				put(2, 3, clipStatus(summary, cols-4), "36")
++			}
+ 		}
+ 		if ok && g.Archived {
+ 			put(2, 3, "Archived · return to groups and press a to unarchive.", "33")
+@@ -71,13 +69,17 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 			left = min(max(cols/3, 30), 44)
+ 		}
+ 		line(4)
++		if left < cols {
++			workspaceBox(workspaceRect{1, 4, left, rows - 9}, "2", put)
++		}
+ 		put(2, 4, " TERMINALS ", "1;36")
+ 		if left < cols {
+-			put(left+2, 4, workspaceWatchHeading(v, workspaceRect{left + 3, 6, cols - left - 6, rows - 12}), "2")
++			put(left+2, 4, workspaceWatchHeading(v, workspaceRect{left + 3, 6, cols - left - 6, rows - 11}), "1;36")
+ 		}
+-		available := max(rows-10, 1)
++		// Rows start at 6 and end above the box's bottom edge at rows-6.
++		available := max(rows-12, 1)
+ 		if left == cols {
+-			available = max((rows-13)/2, 1)
++			available = min(max(len(v.rows), 1), max((rows-13)/2, 1))
+ 		}
+ 		start := max(v.index()-available+1, 0)
+ 		for i := start; i < len(v.rows) && i < start+available; i++ {
+@@ -86,7 +88,7 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 			style := ""
+ 			mark := "  "
+ 			if string(r.ID) == v.selected {
+-				style = "1;7"
++				style = v.theme.selected()
+ 				mark = "› "
+ 			}
+ 			status := workspaceTerminalIcon(r) + " " + workspaceTerminalState(r)
+@@ -94,8 +96,9 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 			if slices.Contains(v.watched(), r.ID) {
+ 				name = "◆ " + name
+ 			}
+-			nameWidth := max(left-16, 5)
+-			put(2, y, mark+statusCell(name, max(left-5, 1)), style)
++			statusWidth := min(textWidth(status), max(left/2-4, 7))
++			nameWidth := max(left-statusWidth-7, 5)
++			put(2, y, statusCell("", max(left-2, 1)), style)
+ 			put(2, y, mark+statusCell(name, nameWidth), style)
+ 			if style == "" {
+ 				if r.Attention > 0 {
+@@ -106,7 +109,7 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 					style = "2"
+ 				}
+ 			}
+-			put(max(left-10, 2), y, status, style)
++			put(left-statusWidth-1, y, clipStatus(status, statusWidth), style)
+ 		}
+ 		if len(v.rows) == 0 && v.snapshot != nil {
+ 			heading := "This group is ready."
+@@ -117,29 +120,33 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 			} else if !v.history && v.snapshot.Overview.HistoryHidden > 0 {
+ 				heading = "Press h to see finished terminals."
+ 			}
+-			put(3, 7, heading, "1")
+-			put(3, 9, "n  Start an agent or shell", "36")
+-			put(3, 11, "a  Bring an existing agent here", "2")
+-			put(3, 13, "Or ask an agent to use this group.", "2")
++			leftPut := func(y int, text, style string) {
++				if y < rows-5 {
++					put(3, y, clipStatus(text, left-6), style)
++				}
++			}
++			leftPut(7, heading, "1")
++			leftPut(9, "n  Start an agent or shell", "36")
++			leftPut(11, "a  Bring an existing agent here", "2")
++			leftPut(13, "Or ask an agent to use this group.", "2")
+ 		}
+ 		if left < cols {
+-			for y := 5; y < rows-5; y++ {
+-				put(left, y, "│", "2")
+-			}
+-			workspaceWatchPanel(&preview, v, workspaceRect{left + 3, 6, max(cols-left-6, 1), max(rows-12, 1)}, cols, put)
++			workspaceWatchPanel(&preview, v, workspaceRect{left + 3, 6, max(cols-left-6, 1), max(rows-11, 1)}, cols, put)
+ 		}
+ 		if left == cols {
+ 			y := 7 + available
+-			area := workspaceRect{3, y + 1, cols - 6, max(rows-y-6, 1)}
+-			put(2, y, workspaceWatchHeading(v, area), "2")
++			area := workspaceRect{2, y, cols - 4, max(rows-y-5, 1)}
++			if n := len(v.watchPanes()); n > 1 {
++				label := fmt.Sprintf(" %d/%d panes ", min(n, workspacePaneLimit(area.h)), n)
++				put(cols-textWidth(label)-2, 4, label, "2")
++			}
+ 			workspaceWatchPanel(&preview, v, area, cols, put)
+ 		}
+ 		if row, ok := v.row(); ok {
+ 			detail := sessionName(row) + " · " + sessionApp(row) + " · " + workspaceTerminalState(row)
+-			put(2, rows-4, detail, "1")
+-			hint := "Enter takes control · v pin/unpin pane · r rename · m move · x close"
++			hint := detail
+ 			if row.State != terminal.OverviewRunning && row.External == nil {
+-				hint = "Enter opens saved screen · v pin pane · R relaunch · x remove"
++				hint = detail + " · R relaunches"
+ 			}
+ 			if row.HumanControl {
+ 				hint = "Another human has control · v pins its live pane"
+@@ -151,7 +158,7 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 			} else if row.External != nil && row.External.Action != "attach" {
+ 				hint = row.External.Reason
+ 			}
+-			put(2, rows-3, hint, "2")
++			put(2, rows-4, clipStatus(hint, cols-4), "2")
+ 		}
+ 	}
+ 	if v.query != "" {
+@@ -178,15 +185,26 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 		}
+ 	}
+ 	if notice != "" {
+-		put(2, max(rows-5, 3), notice, "33")
++		style := "33"
++		if notice == "Returned to your workspace." {
++			style = "2"
++		}
++		put(2, max(rows-5, 3), clipStatus(notice, cols-4), style)
+ 	}
+-	line(rows - 2)
+-	put(2, rows-1, footer, "2")
++	line(rows - 3)
++	workspaceKeys(v, cols, rows-2, put)
+ 	if v.mode != wsNormal && v.mode != wsSearch && v.mode != wsCommand {
+ 		x, y := max((cols-min(cols-4, 70))/2, 1), max((rows-14)/2, 2)
+ 		width := max(min(cols-4, 70), 1)
+ 		for i := 0; i < 12 && y+i < rows-2; i++ {
+-			put(x, y+i, strings.Repeat(" ", width), "7")
++			put(x, y+i, strings.Repeat(" ", width), v.theme.onSurface(""))
++		}
++		workspaceBox(workspaceRect{x, y, width, 12}, "36", put)
++		pagePut := put
++		put := func(px, py int, text, style string) {
++			if px > x && px < x+width-1 && py > y && py < y+11 {
++				pagePut(px, py, clipStatus(text, x+width-1-px), v.theme.onSurface(style))
++			}
+ 		}
+ 		label, hint := "", ""
+ 		switch v.mode {
+@@ -202,18 +220,18 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 		case wsResume:
+ 			label = "Resume this stopped conversation?"
+ 			hint = "Type resume, then Enter. jk / Esc goes back."
+-			put(x+2, y+4, "Starts its agent again in this group.", "7")
++			put(x+2, y+4, "Starts its agent again in this group.", "")
+ 		case wsConfirm:
+ 			label = "Close and remove this work?"
+ 			hint = "Type close, then Enter. jk / Esc goes back."
+-			put(x+2, y+4, clipStatus(workspaceTarget(v), width-4), "1;7")
+-			put(x+2, y+5, "This stops managed programs and removes saved screens.", "7")
++			put(x+2, y+4, clipStatus(workspaceTarget(v), width-4), "1")
++			put(x+2, y+5, "This stops managed programs and removes saved screens.", "")
+ 		case wsLaunch:
+ 			label = "Start a terminal"
+-			put(x+3, y+3, "c   Codex", "1;7")
+-			put(x+3, y+5, "a   Claude", "1;7")
+-			put(x+3, y+7, "s   Shell", "1;7")
+-			put(x+3, y+9, "r   Custom command", "1;7")
++			put(x+3, y+3, "c   Codex", "1")
++			put(x+3, y+5, "a   Claude", "1")
++			put(x+3, y+7, "s   Shell", "1")
++			put(x+3, y+9, "r   Custom command", "1")
+ 			hint = "Choose a letter · jk / Esc goes back"
+ 		case wsMove:
+ 			label = "Move to another group"
+@@ -229,34 +247,43 @@ func workspaceFrame(v workspaceView, cols, rows int) string {
+ 				if i == v.aux {
+ 					mark = "› "
+ 				}
+-				put(x+3, y+3+i-first, clipStatus(mark+available[i].Name, width-6), "1;7")
++				style := ""
++				if i == v.aux {
++					style = v.theme.selected()
++				}
++				put(x+3, y+3+i-first, clipStatus(mark+available[i].Name, width-6), style)
+ 			}
+ 			if len(available) == 0 {
+-				put(x+3, y+4, "Create another group first.", "7")
++				put(x+3, y+4, "Create another group first.", "")
+ 			}
+ 			hint = "j/k choose · Enter moves it · jk / Esc goes back"
+ 		case wsHelp:
+ 			label = "Your workspace"
+-			help := []string{"j/k  Move          Enter  Open / take control", "jk   Back one level     v  Pin / unpin live pane", "n    New           r      Rename", "m    Move terminal x      Close / remove", "jk   Back anywhere h      Show saved / archived work", "a    Outside agents / archive a group", "/    Search        :      Command", "q    Quit browser; work keeps running"}
++			help := []string{"j/k  Move       Enter  Open", "jk   Back       v      Pin / unpin", "n    New        r      Rename", "m    Move       x      Close / remove", "h    Finished / archived work", "a    Outside agents / archive", "/    Search     :      Command", "q    Quit; work keeps running"}
+ 			for i, text := range help {
+-				put(x+2, y+2+i, text, "7")
++				put(x+2, y+2+i, text, "")
+ 			}
+ 			hint = "jk, Esc, q or ? returns"
+ 		}
+-		put(x+2, y+1, label, "1;7")
+-		put(x+2, y+10, clipStatus(hint, width-4), "7")
++		put(x+2, y+1, label, "1;36")
++		put(x+2, y+10, clipStatus(hint, width-4), "2")
+ 		if v.mode == wsNewGroup || v.mode == wsRun || v.mode == wsRename || v.mode == wsConfirm || v.mode == wsResume {
+-			put(x+2, y+7, "› "+v.text, "1;7")
+-			fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", y+8, min(x+4+textWidth(v.text), cols))
++			text := workspaceInputTail(v.text, width-7)
++			put(x+2, y+7, "› "+text, "1")
++			fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", y+8, x+5+textWidth(text))
+ 		}
+ 	} else if v.mode == wsSearch || v.mode == wsCommand {
+ 		prefix := "/ "
++		hint := "Enter applies the filter · jk cancels"
+ 		if v.mode == wsCommand {
+ 			prefix = ": "
++			hint = "Enter runs the command · jk cancels"
+ 		}
+-		put(1, rows-1, strings.Repeat(" ", max(cols-2, 0)), "7")
+-		put(2, rows-1, prefix+v.text, "1;7")
+-		fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", rows, min(3+textWidth(prefix+v.text), cols))
++		put(2, rows-4, clipStatus(hint, cols-4), "2")
++		text := workspaceInputTail(v.text, cols-7)
++		put(1, rows-2, strings.Repeat(" ", max(cols-2, 0)), v.theme.onSurface(""))
++		put(2, rows-2, prefix+text, v.theme.onSurface("1"))
++		fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", rows-1, 3+textWidth(prefix+text))
+ 	}
+ 	out.WriteString("\x1b[0m\x1b[?7h\x1b[?2026l")
+ 	out.WriteString(workspaceBrand(cols, rows, v.brandPhase, v.color))
+diff --git a/cmd/ptyd/workspace_style.go b/cmd/ptyd/workspace_style.go
+new file mode 100644
+index 0000000..deb622e
+--- /dev/null
++++ b/cmd/ptyd/workspace_style.go
+@@ -0,0 +1,136 @@
++package main
++
++import (
++	"encoding/hex"
++	"fmt"
++	"slices"
++	"strings"
++
++	"github.com/2018kguo/phosphor"
++	"github.com/2018kguo/ptyd/internal/terminal"
++)
++
++type workspaceTheme struct{ selection, surface string }
++
++func workspaceThemeFor(colors *terminal.TerminalColors) workspaceTheme {
++	if colors == nil || len(colors.Foreground) != 7 || len(colors.Background) != 7 || colors.Foreground[0] != '#' || colors.Background[0] != '#' {
++		return workspaceTheme{}
++	}
++	fg, e1 := hex.DecodeString(strings.TrimPrefix(colors.Foreground, "#"))
++	bg, e2 := hex.DecodeString(strings.TrimPrefix(colors.Background, "#"))
++	if e1 != nil || e2 != nil || len(fg) != 3 || len(bg) != 3 {
++		return workspaceTheme{}
++	}
++	blend := func(percent int) string {
++		rgb := [3]int{}
++		for i := range rgb {
++			rgb[i] = (int(bg[i])*(100-percent) + int(fg[i])*percent) / 100
++		}
++		return fmt.Sprintf("48;2;%d;%d;%d", rgb[0], rgb[1], rgb[2])
++	}
++	return workspaceTheme{selection: "1;" + blend(16), surface: blend(6)}
++}
++func (t workspaceTheme) selected() string {
++	if t.selection == "" {
++		return "1;36"
++	}
++	return t.selection
++}
++func (t workspaceTheme) onSurface(style string) string {
++	if t.surface == "" {
++		return style
++	}
++	if style == "" {
++		return t.surface
++	}
++	return t.surface + ";" + style
++}
++
++func workspaceBox(r workspaceRect, style string, put func(int, int, string, string)) {
++	if r.w < 2 || r.h < 2 {
++		return
++	}
++	put(r.x, r.y, "╭"+strings.Repeat("─", r.w-2)+"╮", style)
++	for y := r.y + 1; y < r.y+r.h-1; y++ {
++		put(r.x, y, "│", style)
++		put(r.x+r.w-1, y, "│", style)
++	}
++	put(r.x, r.y+r.h-1, "╰"+strings.Repeat("─", r.w-2)+"╯", style)
++}
++
++type workspaceKeyHint struct{ key, label string }
++
++func workspaceKeys(v workspaceView, cols, y int, put func(int, int, string, string)) {
++	hints := []workspaceKeyHint{{"j/k", "move"}, {"Enter", "open"}, {"n", "new"}, {"/", "search"}, {"jk", "back"}, {"?", "help"}, {"q", "quit"}}
++	if v.group != "" {
++		hints = slices.Insert(hints, 2, workspaceKeyHint{"v", "pin"})
++	}
++	switch v.mode {
++	case wsHelp:
++		hints = []workspaceKeyHint{{"jk", "back"}, {"q", "close"}}
++	case wsLaunch:
++		hints = []workspaceKeyHint{{"c/a/s/r", "choose"}, {"jk", "back"}}
++	case wsMove:
++		hints = []workspaceKeyHint{{"j/k", "choose"}, {"Enter", "move"}, {"jk", "back"}}
++	case wsNewGroup:
++		hints = []workspaceKeyHint{{"Enter", "create"}, {"jk", "cancel"}}
++	case wsRun:
++		hints = []workspaceKeyHint{{"Enter", "start"}, {"jk", "cancel"}}
++	case wsRename:
++		hints = []workspaceKeyHint{{"Enter", "save"}, {"jk", "cancel"}}
++	case wsConfirm, wsResume:
++		hints = []workspaceKeyHint{{"Enter", "confirm"}, {"jk", "cancel"}}
++	}
++	width := func() int {
++		n := 0
++		for _, h := range hints {
++			n += textWidth(h.key) + 1 + textWidth(h.label) + 2
++		}
++		return max(n-2, 0)
++	}
++	for _, key := range []string{"/", "n", "j/k", "v"} {
++		if width() <= cols-4 {
++			break
++		}
++		for i, h := range hints {
++			if h.key == key {
++				hints = append(hints[:i], hints[i+1:]...)
++				break
++			}
++		}
++	}
++	x := 2
++	for _, h := range hints {
++		put(x, y, h.key, "1;36")
++		x += textWidth(h.key) + 1
++		put(x, y, h.label, "2")
++		x += textWidth(h.label) + 2
++	}
++}
++
++func workspaceInputTail(text string, width int) string {
++	// Sanitize the whole input before taking its end; the input budget counts
++	// runes, so a display-column cap would discard the suffix of wide text.
++	text = displayText(text, len(text))
++	if textWidth(text) <= width {
++		return text
++	}
++	if width < 2 {
++		return ""
++	}
++	runes := []rune(text)
++	i := len(runes)
++	used := 1
++	for i > 0 {
++		w := max(phosphor.CodepointWidth(runes[i-1]), 0)
++		if used+w > width {
++			break
++		}
++		used += w
++		i--
++	}
++	for i < len(runes) && phosphor.CodepointWidth(runes[i]) == 0 {
++		i++
++	}
++	return "…" + string(runes[i:])
++}
+diff --git a/cmd/ptyd/workspace_style_test.go b/cmd/ptyd/workspace_style_test.go
+new file mode 100644
+index 0000000..3c97d8c
+--- /dev/null
++++ b/cmd/ptyd/workspace_style_test.go
+@@ -0,0 +1,148 @@
++package main
++
++import (
++	"fmt"
++	"github.com/2018kguo/phosphor"
++	"github.com/2018kguo/ptyd/internal/terminal"
++	"strings"
++	"testing"
++)
++
++func TestWorkspacePromptsStayInsideTheirFrame(t *testing.T) {
++	for _, size := range [][2]int{{40, 16}, {80, 24}, {120, 30}, {200, 60}} {
++		cols, rows := size[0], size[1]
++		for _, mode := range []workspaceMode{wsRename, wsRun, wsNewGroup, wsConfirm, wsResume, wsMove, wsLaunch, wsHelp} {
++			v := workspaceView{color: true, text: strings.Repeat("very-long-雪-name-", 30), groups: []terminal.GroupSummary{{Group: terminal.Group{ID: "work", Name: strings.Repeat("long-name", 20)}}}}
++			base := phosphor.New(cols, rows)
++			base.Write([]byte(workspaceFrame(v, cols, rows)))
++			v.mode = mode
++			host := phosphor.New(cols, rows)
++			host.Write([]byte(workspaceFrame(v, cols, rows)))
++			width := min(cols-4, 70)
++			x, y := max((cols-width)/2, 1), max((rows-14)/2, 2)
++			for sy := 0; sy < rows; sy++ {
++				for sx := 0; sx < cols; sx++ {
++					// The action bar follows the open dialog's controls.
++					if sy == rows-2 && sx >= 2 && sx < cols-2 {
++						continue
++					}
++					if sx >= x && sx < x+width && sy >= y && sy < y+12 {
++						continue
++					}
++					if host.Cell(sx, sy) != base.Cell(sx, sy) {
++						t.Fatalf("mode %d on %dx%d escaped dialog at %d,%d", mode, cols, rows, sx, sy)
++					}
++				}
++			}
++			if mode != wsHelp && strings.Contains(host.Line(rows-2), "q quit") {
++				t.Fatal("dialog advertised a quit key that edits its field")
++			}
++			if mode == wsRename || mode == wsRun || mode == wsNewGroup || mode == wsConfirm || mode == wsResume {
++				c := host.Cursor()
++				if c.X <= x || c.X >= x+width-1 || c.Y != y+7 {
++					t.Fatalf("input caret outside dialog: %+v", c)
++				}
++				if !strings.Contains(host.Line(y+7), "雪-name-") {
++					t.Fatal("long input did not keep its end visible")
++				}
++			}
++		}
++	}
++}
++
++func TestWorkspaceLongListsKeepTheirBottomBorders(t *testing.T) {
++	for _, size := range [][2]int{{120, 29}, {120, 30}, {200, 60}} {
++		cols, rows := size[0], size[1]
++		for _, group := range []terminal.GroupID{"", "work"} {
++			v := workspaceView{group: group}
++			for i := 0; i < 80; i++ {
++				id := fmt.Sprintf("item-%d", i)
++				v.groups = append(v.groups, terminal.GroupSummary{Group: terminal.Group{ID: terminal.GroupID(id), Name: id}, Running: 1, Terminals: 1})
++				v.rows = append(v.rows, terminal.SessionSummary{ID: terminal.ID(id), Name: id, State: terminal.OverviewRunning})
++				v.selected = id
++			}
++			host := phosphor.New(cols, rows)
++			host.Write([]byte(workspaceFrame(v, cols, rows)))
++			left := min(max(cols/3, 30), 42)
++			if group != "" {
++				left = min(max(cols/3, 30), 44)
++			}
++			for x := 1; x <= left; x++ {
++				want := '─'
++				if x == 1 {
++					want = '╰'
++				}
++				if x == left {
++					want = '╯'
++				}
++				if got := host.Cell(x, rows-6).Rune; got != want {
++					t.Fatalf("group=%q %dx%d list painted over border at %d: %c", group, cols, rows, x, got)
++				}
++			}
++		}
++	}
++}
++func TestWorkspaceFooterHasBreathingRoom(t *testing.T) {
++	for _, cols := range []int{40, 60, 80, 120, 200} {
++		for _, group := range []terminal.GroupID{"", "work"} {
++			host := phosphor.New(cols, 24)
++			host.Write([]byte(workspaceFrame(workspaceView{group: group}, cols, 24)))
++			if strings.TrimSpace(host.Line(23)) != "" {
++				t.Fatal("controls occupy the terminal's clipped bottom edge")
++			}
++			bar := host.Line(22)
++			for _, hint := range []string{"Enter open", "jk back", "? help", "q quit"} {
++				if !strings.Contains(bar, hint) {
++					t.Fatalf("%d columns lost %q: %s", cols, hint, bar)
++				}
++			}
++		}
++	}
++}
++func TestWorkspaceThemeFollowsLightAndDarkTerminals(t *testing.T) {
++	for _, colors := range []*terminal.TerminalColors{{Foreground: "#e0e0e0", Background: "#202020"}, {Foreground: "#202020", Background: "#e0e0e0"}} {
++		theme := workspaceThemeFor(colors)
++		host := phosphor.New(40, 16)
++		host.Write([]byte("\x1b[" + theme.selected() + "m selected "))
++		c := host.Cell(0, 0)
++		if c.Style.Attrs&phosphor.AttrInverse != 0 || c.Style.Bg.Kind() != phosphor.ColorRGB {
++			t.Fatal("selection did not use a soft terminal-relative surface")
++		}
++		rgb := c.Style.Bg.RGB()
++		if colors.Background == "#202020" && rgb.R >= 100 || colors.Background == "#e0e0e0" && rgb.R <= 160 {
++			t.Fatalf("surface lost the terminal's tone: %+v", rgb)
++		}
++	}
++}
++
++func TestWorkspaceInputTailKeepsWideTextSuffix(t *testing.T) {
++	text := strings.Repeat("雪", 2050) + "-REAL-END"
++	if got := workspaceInputTail(text, 29); !strings.HasSuffix(got, "-REAL-END") || textWidth(got) > 29 {
++		t.Fatalf("wide input lost its actual end: %q", got)
++	}
++}
++
++func TestWorkspaceNarrowPaneCountStaysVisible(t *testing.T) {
++	v := workspaceView{group: "work", selected: "four", pins: map[terminal.GroupID][]terminal.ID{"work": {"one", "two", "three"}}, snapshot: &workspaceSnapshot{Query: workspaceQuery{Group: "work"}, PreviewID: "four", Preview: phosphor.New(80, 24)}}
++	for _, id := range []terminal.ID{"one", "two", "three", "four"} {
++		v.rows = append(v.rows, terminal.SessionSummary{ID: id, Name: string(id), State: terminal.OverviewRunning})
++	}
++	for _, size := range [][2]int{{40, 16}, {80, 24}} {
++		host := phosphor.New(size[0], size[1])
++		host.Write([]byte(workspaceFrame(v, size[0], size[1])))
++		if !strings.Contains(host.Line(4), "1/4 panes") {
++			t.Fatalf("narrow view hid pane visibility: %s", host.Line(4))
++		}
++		if !strings.Contains(strings.Join(host.Lines(), "\n"), "four") {
++			t.Fatal("narrow layout omitted selected terminal")
++		}
++	}
++	v.rows = v.rows[:2]
++	v.selected = "two"
++	v.pins["work"] = []terminal.ID{"one", "two"}
++	host := phosphor.New(80, 24)
++	host.Write([]byte(workspaceFrame(v, 80, 24)))
++	if !strings.Contains(host.Line(4), "2/2 panes") {
++		t.Fatalf("short list wasted space needed for live panes: %s", host.Line(4))
++	}
++}
+diff --git a/cmd/ptyd/workspace_test.go b/cmd/ptyd/workspace_test.go
+index 74e39a1..7884c58 100644
+--- a/cmd/ptyd/workspace_test.go
++++ b/cmd/ptyd/workspace_test.go
+@@ -521,7 +521,7 @@ func TestPreviewCanonicalRowsKeepHistoricalClusters(t *testing.T) {
+ 
+ func TestWorkspacePreviewFrameKeepsChromeAndSourceState(t *testing.T) {
+ 	const cols, rows, left = 120, 24, 40
+-	rect := workspaceRect{left + 3, 8, cols - left - 6, rows - 16}
++	rect := workspaceRect{left + 5, 8, cols - left - 10, rows - 15}
+ 	cases := []string{
+ 		"\x1b[?2027h\x1b[1;3H🇧🇨\x1b[?2027l\x1b[1;1H🇦",
+ 		"\x1b[?2027lA❤️",
+@@ -539,7 +539,7 @@ func TestWorkspacePreviewFrameKeepsChromeAndSourceState(t *testing.T) {
+ 		v := workspaceView{group: "work", selected: "preview", color: true,
+ 			groups:   []terminal.GroupSummary{{Group: terminal.Group{ID: "work", Name: "work"}, Running: 1, Terminals: 1}},
+ 			rows:     []terminal.SessionSummary{{ID: "preview", Name: "preview", State: terminal.OverviewRunning}},
+-			snapshot: &workspaceSnapshot{Query: workspaceQuery{Group: "work"}, PreviewID: "preview"},
++			snapshot: &workspaceSnapshot{Query: workspaceQuery{Group: "work"}, PreviewID: "preview", Preview: phosphor.New(80, 4)},
+ 		}
+ 		chrome := phosphor.New(cols, rows)
+ 		chrome.Write([]byte(workspaceFrame(v, cols, rows)))
+@@ -549,12 +549,14 @@ func TestWorkspacePreviewFrameKeepsChromeAndSourceState(t *testing.T) {
+ 		sourcePalette, hostPalette := source.Palette(), host.Palette()
+ 		for y := 0; y < rows; y++ {
+ 			for x := 0; x < cols; x++ {
++				// The pane's crop caption depends on its screen contents too.
++				caption := y == rows-6 && x >= rect.x && x < rect.x+rect.w
+ 				if x >= rect.x && x < rect.x+rect.w && y >= rect.y && y < rect.y+4 {
+ 					actual, want := host.Cell(x, y), source.Cell(x-rect.x, y-rect.y)
+ 					if actual.Text() != want.Text() || actual.Width != want.Width || hostPalette.Resolve(actual.Style.Fg, false) != sourcePalette.Resolve(want.Style.Fg, false) || hostPalette.Resolve(actual.Style.Bg, true) != sourcePalette.Resolve(want.Style.Bg, true) {
+ 						t.Fatalf("%q at %d,%d: actual=%+v want=%+v", input, x, y, actual, want)
+ 					}
+-				} else if !(x >= rect.x && x < rect.x+rect.w && y >= rect.y && y < rect.y+rect.h) {
++				} else if !caption && !(x >= rect.x && x < rect.x+rect.w && y >= rect.y && y < rect.y+rect.h) {
+ 					if host.Cell(x, y) != chrome.Cell(x, y) {
+ 						t.Fatalf("%q changed chrome at %d,%d", input, x, y)
+ 					}
+@@ -566,3 +568,56 @@ func TestWorkspacePreviewFrameKeepsChromeAndSourceState(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestPreviewKeepsAppRowsBelowCursor(t *testing.T) {
++	for _, content := range []string{
++		"\x1b[30;1HAPP FOOTER",
++		"\x1b[30;1H\x1b[48;2;40;42;54m\x1b[K\x1b[0m",
++		"\x1b[30;1H\x1b[7m" + strings.Repeat(" ", 80) + "\x1b[0m",
++	} {
++		source := phosphor.New(80, 30)
++		source.Write([]byte("\x1b[1;1HEARLIER OUTPUT" + content + "\x1b[27;3HPROMPT\x1b[27;3H"))
++		before := source.Snapshot()
++		var output strings.Builder
++		first := workspacePreviewLayer(&output, source, workspaceRect{2, 2, 50, 8}, true, 60)
++		if first != 22 {
++			t.Fatalf("app footer below cursor clipped: first=%d", first)
++		}
++		host := phosphor.New(60, 12)
++		host.Write([]byte(output.String()))
++		for x := 0; x < 50; x++ {
++			got, want := host.Cell(x+2, 9), source.Cell(x, 29)
++			if got.Text() != want.Text() || got.Style != want.Style {
++				t.Fatalf("footer at %d: got=%+v want=%+v", x, got, want)
++			}
++		}
++		if string(source.Snapshot()) != string(before) {
++			t.Fatal("preview changed source state")
++		}
++	}
++	sparse := phosphor.New(80, 60)
++	sparse.Write([]byte("BUILD-READY\r\n$ "))
++	if first := workspacePreviewStart(sparse, 8); first != 0 {
++		t.Fatal("sparse shell scrolled into blank space")
++	}
++}
++
++func TestPreviewCropHintsMatchPaintedContent(t *testing.T) {
++	source := phosphor.New(20, 4)
++	source.Write([]byte("short\x1b[3;12HOFFSCREEN"))
++	area := workspaceRect{1, 1, 10, 1}
++	if hidden := workspacePreviewRight(source, area, 0); hidden != 0 {
++		t.Fatal("blank columns or an offscreen row were reported as cropped content")
++	}
++	source.Write([]byte("\x1b[1;10H雪"))
++	if hidden := workspacePreviewRight(source, area, 0); hidden != 1 {
++		t.Fatalf("split wide glyph was omitted without a crop hint: %d", hidden)
++	}
++	var output strings.Builder
++	workspacePreviewLayer(&output, source, area, true, 24)
++	host := phosphor.New(24, 3)
++	host.Write([]byte(output.String()))
++	if strings.Contains(host.Line(1), "雪") {
++		t.Fatal("split wide glyph escaped the preview edge")
++	}
++}
+diff --git a/cmd/ptyd/workspace_watch.go b/cmd/ptyd/workspace_watch.go
+index ed9e97c..9cfe102 100644
+--- a/cmd/ptyd/workspace_watch.go
++++ b/cmd/ptyd/workspace_watch.go
+@@ -23,7 +23,7 @@ func workspaceWatchPanel(out *strings.Builder, v workspaceView, r workspaceRect,
+ 		}
+ 		return
+ 	}
+-	visible := min(len(panes), max(r.h/3, 1))
++	visible := min(len(panes), workspacePaneLimit(r.h))
+ 	if visible < len(panes) {
+ 		focused := -1
+ 		for i, p := range panes {
+@@ -37,37 +37,60 @@ func workspaceWatchPanel(out *strings.Builder, v workspaceView, r workspaceRect,
+ 			panes = panes[:visible]
+ 		}
+ 	}
+-	height := max(r.h/visible, 1)
+ 	for i, p := range panes {
+-		y := r.y + i*height
+-		focused := string(p.Row.ID) == v.selected
+-		pinned := slices.Contains(v.watched(), p.Row.ID)
+-		style := "2"
+-		if focused {
+-			style = "1;36"
+-		} else if pinned {
+-			style = "36"
+-		}
+-		if len(panes) > 1 {
+-			put(r.x, y, strings.Repeat("─", max(r.w, 1)), "2")
+-		}
+-		put(r.x, y, clipStatus(workspacePaneLabel(p, pinned, focused), r.w), style)
+-		h := height - 2
+-		if h < 1 {
+-			continue
++		y := r.y + i*(r.h+1)/visible
++		height := (i+1)*(r.h+1)/visible - i*(r.h+1)/visible - 1
++		workspacePreviewPane(out, v, p, workspaceRect{r.x, y, r.w, height}, cols, put)
++	}
++}
++
++func workspacePaneLimit(height int) int { return max((height+1)/5, 1) }
++func workspacePreviewPane(out *strings.Builder, v workspaceView, p workspacePinnedPreview, box workspaceRect, cols int, put func(int, int, string, string)) {
++	focused := string(p.Row.ID) == v.selected
++	pinned := slices.Contains(v.watched(), p.Row.ID)
++	style := "2"
++	if focused {
++		style = "36"
++	}
++	workspaceBox(box, style, put)
++	put(box.x+2, box.y, clipStatus(" "+workspacePaneLabel(p, pinned, focused)+" ", box.w-4), "1;"+style)
++	padding := 1
++	if box.h >= 7 {
++		padding = 2
++	}
++	body := workspaceRect{box.x + 2, box.y + padding, box.w - 4, box.h - 2*padding}
++	if body.h < 1 {
++		return
++	}
++	first := 0
++	if p.Screen != nil {
++		first = workspacePreviewLayer(out, p.Screen, body, v.color, cols)
++	} else if p.Err != nil {
++		put(body.x, body.y, clipStatus("Preview unavailable: "+p.Err.Error(), body.w), "33")
++	} else {
++		put(body.x, body.y, clipStatus("Loading live pane…", body.w), "2")
++	}
++	label := "Live"
++	if p.Row.State != terminal.OverviewRunning {
++		label = "Saved screen"
++	}
++	if pinned {
++		label += " · ◆ pinned"
++	}
++	if p.Screen != nil {
++		if first > 0 {
++			label += fmt.Sprintf(" · ↑ %d rows above", first)
+ 		}
+-		if p.Screen != nil {
+-			workspacePreviewLayer(out, p.Screen, workspaceRect{r.x, y + 2, r.w, h}, v.color, cols)
+-		} else if p.Err != nil {
+-			put(r.x, y+2, clipStatus("Preview unavailable: "+p.Err.Error(), r.w), "33")
+-		} else {
+-			put(r.x, y+2, "Loading live pane…", "2")
++		if hidden := workspacePreviewRight(p.Screen, body, first); hidden > 0 {
++			label += fmt.Sprintf(" · → %d cols hidden", hidden)
+ 		}
+ 	}
++	put(box.x+2, box.y+box.h-1, clipStatus(" "+label+" ", box.w-4), "2")
+ }
++
+ func workspaceWatchHeading(v workspaceView, r workspaceRect) string {
+ 	n := len(v.watchPanes())
+-	visible := min(n, max(r.h/3, 1))
++	visible := min(n, workspacePaneLimit(r.h))
+ 	if n > visible {
+ 		return fmt.Sprintf(" WATCH PANES · %d/%d visible ", visible, n)
+ 	}
+diff --git a/docs/demo.gif b/docs/demo.gif
+index b5cf48a..e4075c9 100644
+Binary files a/docs/demo.gif and b/docs/demo.gif differ
+diff --git a/docs/demo.tape b/docs/demo.tape
+index d07cf1d..f947c0f 100644
+--- a/docs/demo.tape
++++ b/docs/demo.tape
+@@ -25,6 +25,10 @@ Type "q"
+ Sleep 600ms
+ Type "ptyd attach website" Enter
+ Sleep 1800ms
++Type "n"
++Sleep 900ms
++Type@40ms "jk"
++Sleep 500ms
+ Type "v"
+ Sleep 900ms
+ Type "j"
+diff --git a/docs/development.md b/docs/development.md
+index 85dddd5..fa48541 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -12,6 +12,10 @@ go test -race ./...
+ CLI tests start real PTYs and exercise daemon crashes. When testing in
+ Docker, use `--init` so orphaned test children are reaped.
+ 
++Output coalescing checks control timer expiry and queue wakeups directly.
++They verify which event releases output without depending on millisecond
++scheduling deadlines on a shared runner.
++
+ - `cmd/ptyd`: group workspace, CLI, attach behavior and real-PTY end-to-end tests.
+ - `internal/terminal`: groups, session lifecycle, retained output, watches and persistence.
+ - `internal/api`, `internal/client`: HTTP server and client.
+@@ -86,6 +90,11 @@ restarts without claiming control or resizing them. Back-navigation tests cover
+ prompts, attachments, repeated chords and late launch responses. Header animation
+ checks compare every cell outside its reserved rectangle.
+ 
++Preview crop tests include footers and painted blank rows below the app cursor.
++Dialog tests compare every cell outside their frames at narrow and wide sizes;
++long fields include wide Unicode text near the input limit. Footer checks keep
++Back, help and quit visible above the terminal's bottom edge.
++
+ The README demo is reproducible with `vhs docs/demo.tape`. Its setup creates
+ disposable local terminals, uses an ephemeral port, and removes its
+ own processes and files on exit. It does not need an agent login or call a
+diff --git a/docs/reference.md b/docs/reference.md
+index 51151ac..a1d24fa 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -292,6 +292,16 @@ are visible. Previews do not resize the source terminal, attach a viewer or take
+ keyboard control. An occupied terminal can be pinned while its human keeps control.
+ Enter opens the selected terminal when control is available.
+ 
++Previews follow the last painted row, including app footers and input-box
++backgrounds below the cursor. When the source is larger than its pane, the bottom
++edge reports rows above the preview or painted columns hidden to the right.
++Empty space outside the pane does not count as hidden content. Previews crop
++the existing screen; opening a terminal gives the app the attached window's size.
++
++Selection and dialog backgrounds follow the viewing terminal's light or dark
++colors. The shortcut bar leaves an empty bottom row, and long prompt fields
++keep their end and caret visible inside the dialog.
++
+ Pins are local presentation settings, saved per daemon address under
+ `$XDG_STATE_HOME/ptyd` (default `~/.local/state/ptyd`) in an owner-only `view-*.json`
+ file. They persist across browser restarts. `●` means running, `◉` human control,
+diff --git a/internal/terminal/attach_test.go b/internal/terminal/attach_test.go
+index cd9c15a..7122bac 100644
+--- a/internal/terminal/attach_test.go
++++ b/internal/terminal/attach_test.go
+@@ -119,52 +119,107 @@ func TestTypingClientGetsItsSize(t *testing.T) {
+ 	}
+ }
+ 
+-// Bulk output to a busy client is sent at most once per Coalesce, in one
+-// piece; a keystroke's echo is not held back, and a quiet client gives
+-// back a large buffer.
++// Done is evaluated after Read arms its timer. This gives the test a barrier
++// before it expires the timer or pushes output, without scheduler deadlines.
++type attachmentReadBarrier struct {
++	context.Context
++	waiting chan struct{}
++}
++
++func (c *attachmentReadBarrier) Done() <-chan struct{} {
++	select {
++	case c.waiting <- struct{}{}:
++	default:
++	}
++	return c.Context.Done()
++}
++
++// Bulk output waits for the coalescing timer, echoes skip it, a full queue
++// wakes it early, and an idle client releases its large buffer.
+ func TestAttachCoalescesBulkOutput(t *testing.T) {
+ 	a := &attacher{wake: make(chan struct{}, 1)}
+ 	at := &Attachment{a: a}
+-	ctx := context.Background()
++	t.Cleanup(func() {
++		if at.timer != nil {
++			at.timer.Stop()
++		}
++	})
+ 	bulk := bytes.Repeat([]byte("x"), 300<<10)
+-
+-	a.push(bulk)
+-	start := time.Now()
+-	if b, _ := at.Read(ctx); len(b) != len(bulk) || time.Since(start) > Coalesce*3/4 {
+-		t.Fatalf("first output after a quiet spell: %d bytes after %v", len(b), time.Since(start))
++	ready, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancelReady()
++	// Quiet output and echoes must never arm the coalescing timer.
++	a.push(bulk[:2048])
++	if b, err := at.Read(ready); len(b) != 2048 || err != nil || at.timer != nil {
++		t.Fatalf("first output after a quiet spell was held: %d bytes, %v", len(b), err)
+ 	}
++	// Keep the coalescing deadline far ahead so scheduling cannot expire it.
++	at.sent = time.Now().Add(time.Hour)
+ 	a.push([]byte("e"))
+-	if b, _ := at.Read(ctx); string(b) != "e" || time.Since(start) > Coalesce*3/4 {
+-		t.Fatalf("echo held back: %q after %v", b, time.Since(start))
++	if b, err := at.Read(ready); string(b) != "e" || err != nil || at.timer != nil {
++		t.Fatalf("echo was held: %q, %v", b, err)
+ 	}
+-	sent := time.Now()
+-	a.push(bulk[:2048])
+-	go func() {
+-		time.Sleep(Coalesce / 4)
+-		a.push(bulk[:2048])
+-	}()
+-	b, _ := at.Read(ctx)
+-	if len(b) != 4096 || time.Since(sent) < Coalesce*3/4 {
+-		t.Fatalf("bulk output: %d bytes after %v, want 4096 after about %v", len(b), time.Since(sent), Coalesce)
++	at.sent = time.Now().Add(time.Hour)
++	a.push(bulk)
++	if b, err := at.Read(ready); len(b) != len(bulk) || err != nil || at.timer != nil {
++		t.Fatalf("already full queue was held: %d bytes, %v", len(b), err)
++	}
++	type readResult struct {
++		data []byte
++		err  error
++	}
++	startRead := func() (*attachmentReadBarrier, <-chan readResult, context.CancelFunc) {
++		parent, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++		finished := make(chan struct{})
++		t.Cleanup(func() { cancel(); <-finished })
++		ctx := &attachmentReadBarrier{Context: parent, waiting: make(chan struct{}, 1)}
++		done := make(chan readResult, 1)
++		go func() {
++			defer close(finished)
++			b, err := at.Read(ctx)
++			done <- readResult{b, err}
++		}()
++		return ctx, done, cancel
++	}
++	wait := func(ctx *attachmentReadBarrier, done <-chan readResult) {
++		t.Helper()
++		select {
++		case <-ctx.waiting:
++		case result := <-done:
++			t.Fatalf("read returned before waiting: %d bytes, %v", len(result.data), result.err)
++		case <-ctx.Context.Done():
++			t.Fatal("read did not reach its wait")
++		}
+ 	}
+-
+-	// Held output that reaches holdMax is sent at once, so holding never
+-	// overflows the queue.
+-	sent = time.Now()
++	at.sent = time.Now().Add(time.Hour)
++	a.push(bulk[:2048])
++	ctx, done, _ := startRead()
++	wait(ctx, done)
+ 	a.push(bulk[:2048])
+-	go func() {
+-		time.Sleep(Coalesce / 8)
+-		a.push(bulk)
+-	}()
+-	if b, _ := at.Read(ctx); len(b) != 2048+len(bulk) || time.Since(sent) > Coalesce*3/4 {
+-		t.Fatalf("held output past holdMax: %d bytes after %v", len(b), time.Since(sent))
++	at.timer.Reset(0)
++	if result := <-done; result.err != nil || len(result.data) != 4096 {
++		t.Fatalf("timer did not release coalesced output: %d bytes, %v", len(result.data), result.err)
+ 	}
+-
+-	// Quiet: after a second the large buffer is released.
+-	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+-	defer cancel()
+-	if _, err := at.Read(ctx); err == nil {
+-		t.Fatal("read without output")
++	// Reaching holdMax must wake the reader without the timer expiring.
++	at.sent = time.Now().Add(time.Hour)
++	a.push(bulk[:2048])
++	ctx, done, _ = startRead()
++	wait(ctx, done)
++	a.push(bulk)
++	if result := <-done; result.err != nil || len(result.data) != 2048+len(bulk) {
++		t.Fatalf("full queue did not release held output: %d bytes, %v", len(result.data), result.err)
++	}
++	if !at.timer.Stop() {
++		t.Fatal("full queue waited for its timer")
++	}
++	// Expire the idle timer, then wait until Read has released the buffer
++	// and entered its next wait before canceling it.
++	ctx, done, cancel := startRead()
++	wait(ctx, done)
++	at.timer.Reset(0)
++	wait(ctx, done)
++	cancel()
++	if result := <-done; !errors.Is(result.err, context.Canceled) {
++		t.Fatalf("idle read did not wait for cancellation: %v", result.err)
+ 	}
+ 	a.mu.Lock()
+ 	defer a.mu.Unlock()

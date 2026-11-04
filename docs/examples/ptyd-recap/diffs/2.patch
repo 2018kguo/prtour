@@ -1,0 +1,410 @@
+diff --git a/README.md b/README.md
+index 6dfe792..6abf061 100644
+--- a/README.md
++++ b/README.md
+@@ -268,11 +268,15 @@ Each terminal has a directory `DIR/<id>/`
+ | File | Contents |
+ | --- | --- |
+ | `meta.json` | Create config (including `env`), restore policy, pid and process identity, restore count. |
+-| `screen.ckpt` | Checkpoint: a JSON header line, then the bytes that repaint the screen and scrollback. Written atomically (temp file, fsync, rename). |
++| `screen.ckpt` | Checkpoint: a JSON header line, then an exact phosphor snapshot. Written atomically (temp file, fsync, rename). Existing version 1 ANSI checkpoints remain readable. |
+ | `tail.<gen>` | Everything printed (and every resize) since the checkpoint, as length-prefixed records. |
+ | `exit.json` | Why the terminal is not running: `child_exit`, `shutdown`, or `not_restored` with the notice. |
+ | `agent-session.json` | Agent policy only: the session the agent is in, written by its hooks. |
+ 
++New checkpoints use version 2 and require this version of ptyd or later.
++Loading a version 1 checkpoint leaves its file unchanged until the next
++normal checkpoint replaces it.
++
+ The checkpoint plus the tails replayed through a fresh emulator give the
+ exact window, also after `kill -9` of the daemon: every read from the
+ PTY is in its tail before the next one (written, or on macOS copied into
+@@ -284,10 +288,11 @@ in the middle of an escape sequence, is tolerated.
+ Bounds: a checkpoint is taken when output has been quiet for 1s (at most
+ every 15s), when a tail passes 4 MiB, when the program exits, and on a
+ graceful shutdown (before the program is stopped, so what it prints on
+-its way out is not saved). So disk use per terminal stays under about
+-8.5 MiB, replay after a crash reads at most 8 MiB, and writes are the
+-output itself plus at most one checkpoint (≤ ~300 KiB) per 4 MiB of
+-output or per 15s of activity. An idle terminal has no open file and no
++its way out is not saved). Tails occupy about 8 MiB at most, in addition
++to the checkpoint. Snapshot size depends on screen geometry, retained
++history and metadata. Checkpoints retain the existing PTY geometry and
++storage limits. Writes are the output itself plus at
++most one checkpoint per 4 MiB of output or per 15s of activity. An idle terminal has no open file and no
+ timer. Directories are deleted with the terminal (`DELETE`), and ghosts
+ untouched for 7 days are pruned at startup.
+ 
+diff --git a/bench/phosphor-v0.3.0/README.md b/bench/phosphor-v0.3.0/README.md
+new file mode 100644
+index 0000000..c9f753e
+--- /dev/null
++++ b/bench/phosphor-v0.3.0/README.md
+@@ -0,0 +1,38 @@
++# Exact checkpoints with phosphor v0.3.0
++
++Ptyd now requires the published phosphor v0.3.0 module and writes version 2
++checkpoints with its exact binary snapshot API. Existing version 1 ANSI
++checkpoints remain readable; reading one does not rewrite it. New version 2
++files require this ptyd version or later. No daemon or installed binary was
++restarted or replaced for this work.
++
++Both writers use the same format: ordinary/final checkpoints and the saved
++notice when an agent cannot resume. The reader checks the snapshot before
++replaying tail data and resizes. A header/body version mismatch is rejected.
++Owner-only daemon files retain the existing accepted geometry/storage
++contract instead of inheriting the library's smaller default restore limits.
++
++`TestExactCheckpointContinuesThroughTail` covers REP, inactive/saved screens,
++outside-origin cursors, graphemes and incomplete UTF-8/CSI/OSC, followed by
++actual tail data and a resize. Additional tests cover existing checkpoints,
++corruption, version mismatch, accepted sparse geometry and restore notices.
++The dependency was downloaded from its public tag, without a module replace.
++
++The profile in `cmd/ptyd/default.pgo` was regenerated using the existing
++`bench/pgo.sh` procedure: 32 producers at 1 MiB/s and eight flat-out producers,
++with attach clients, SSE and persistence. macOS arm64 used Go 1.26.3; Linux
++arm64 used Go 1.26.10 in a four-CPU VM. CPU profiles from both systems were
++merged. The two `profile-*.jsonl` files describe those unoptimized collection
++runs, not a before/after performance comparison.
++
++`load-smoke.jsonl` compares v0.1.0 with the new candidate on macOS, both
++using their own PGO profiles. There is one agents run per variant and two
++flat-out runs, reversing order for the second pair. The first pass's labels
++were normalized from the recorded driver order; measurements are unchanged.
++Flat-out output spans 102-127 MB/s on the baseline and 104-120 MB/s on the
++candidate. The samples do not establish an end-to-end gain or regression;
++the host varied substantially. Both variants completed all keystroke/output
++checks. No fleet-throughput claim follows from these smoke runs.
++
++The emulator's compatibility, idle memory and checkpoint restore measurements
++are in the [phosphor comparison](https://github.com/2018kguo/phosphor/blob/v0.3.0/oracle/ghostty/results/2026-10-27-round3/README.md).
+diff --git a/bench/phosphor-v0.3.0/load-smoke.jsonl b/bench/phosphor-v0.3.0/load-smoke.jsonl
+new file mode 100644
+index 0000000..b664f42
+--- /dev/null
++++ b/bench/phosphor-v0.3.0/load-smoke.jsonl
+@@ -0,0 +1,6 @@
++{"Label":"baseline:agents","N":32,"Rate":1048576,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.004843208,"EchoP50Ms":0.127,"EchoP99Ms":5.533,"EchoMaxMs":16.858,"Keystrokes":1791,"OutputMBps":33.74408863599654,"AttachMBps":33.74298606999219,"SSELinesPerSec":193542.5633109032,"CPUCores":1.229698231568728,"PeakRSSMiB":83.546875,"GCPauseP50Us":49.152,"GCPauseP99Us":8388.608,"GCPauseMaxUs":8388.608,"GCCycles":2,"HeapMiB":40.117835998535156,"WriteAmplification":1.033105563140964,"FsyncsPerSec":12.79380369475951,"CheckpointsPerSec":6.496853438745064}
++{"Label":"baseline:flat","N":8,"Rate":0,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.004579583,"EchoP50Ms":0.15,"EchoP99Ms":0.804,"EchoMaxMs":6.671,"Keystrokes":1859,"OutputMBps":126.96756275080749,"AttachMBps":126.94535522093013,"SSELinesPerSec":728155.5351289967,"CPUCores":3.040917086780497,"PeakRSSMiB":53.359375,"GCPauseP50Us":81.92,"GCPauseP99Us":3670.016,"GCPauseMaxUs":3670.016,"GCCycles":17,"HeapMiB":14.888557434082031,"WriteAmplification":1.0656083417431925,"FsyncsPerSec":61.17198578138393,"CheckpointsPerSec":30.585992890691966}
++{"Label":"candidate:agents","N":32,"Rate":1048576,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.003358541,"EchoP50Ms":0.136,"EchoP99Ms":5.208,"EchoMaxMs":26.141,"Keystrokes":1787,"OutputMBps":33.74984527608965,"AttachMBps":33.74781275871895,"SSELinesPerSec":193570.388591353,"CPUCores":1.2707216229329792,"PeakRSSMiB":84.375,"GCPauseP50Us":81.92,"GCPauseP99Us":393.216,"GCPauseMaxUs":393.216,"GCCycles":2,"HeapMiB":37.08848571777344,"WriteAmplification":1.032827537134417,"FsyncsPerSec":12.79570251084935,"CheckpointsPerSec":6.497817681290686}
++{"Label":"candidate:flat","N":8,"Rate":0,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.000976958,"EchoP50Ms":0.151,"EchoP99Ms":0.849,"EchoMaxMs":9.238,"Keystrokes":1850,"OutputMBps":120.29276970162977,"AttachMBps":120.292577920366,"SSELinesPerSec":689996.8902018141,"CPUCores":3.204649519201502,"PeakRSSMiB":52.8125,"GCPauseP50Us":98.304,"GCPauseP99Us":7340.032,"GCPauseMaxUs":7340.032,"GCCycles":15,"HeapMiB":21.830078125,"WriteAmplification":1.0644389660838167,"FsyncsPerSec":57.39439280887902,"CheckpointsPerSec":28.69719640443951}
++{"Label":"candidate:flat","N":8,"Rate":0,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.002542083,"EchoP50Ms":0.158,"EchoP99Ms":0.365,"EchoMaxMs":14.542,"Keystrokes":1848,"OutputMBps":103.98070794100153,"AttachMBps":103.97921412074304,"SSELinesPerSec":596429.8825734818,"CPUCores":3.389416382223483,"PeakRSSMiB":49.46875,"GCPauseP50Us":81.92,"GCPauseP99Us":4194.304,"GCPauseMaxUs":4194.304,"GCCycles":14,"HeapMiB":14.619453430175781,"WriteAmplification":1.0647743862071193,"FsyncsPerSec":49.78734364401074,"CheckpointsPerSec":24.993646407635914}
++{"Label":"baseline:flat","N":8,"Rate":0,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.002932167,"EchoP50Ms":0.157,"EchoP99Ms":0.56,"EchoMaxMs":3.611,"Keystrokes":1850,"OutputMBps":102.13318414478456,"AttachMBps":102.13330830837772,"SSELinesPerSec":585843.1210133387,"CPUCores":3.305099489634477,"PeakRSSMiB":51.65625,"GCPauseP50Us":81.92,"GCPauseP99Us":393.216,"GCPauseMaxUs":393.216,"GCCycles":13,"HeapMiB":17.26305389404297,"WriteAmplification":1.065582180330058,"FsyncsPerSec":48.78569521944055,"CheckpointsPerSec":24.492818296645357}
+diff --git a/bench/phosphor-v0.3.0/profile-linux.jsonl b/bench/phosphor-v0.3.0/profile-linux.jsonl
+new file mode 100644
+index 0000000..07b8888
+--- /dev/null
++++ b/bench/phosphor-v0.3.0/profile-linux.jsonl
+@@ -0,0 +1,2 @@
++{"Label":"agents","N":32,"Rate":1048576,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.00173286,"EchoP50Ms":0.107,"EchoP99Ms":0.336,"EchoMaxMs":2.479,"Keystrokes":1915,"OutputMBps":33.7481186235162,"AttachMBps":33.74987491917475,"SSELinesPerSec":193570.65691514578,"CPUCores":0.6194767533513187,"PeakRSSMiB":64.546875,"GCPauseP50Us":3.072,"GCPauseP99Us":917.504,"GCPauseMaxUs":917.504,"GCCycles":1,"HeapMiB":51.8048095703125,"WriteAmplification":1.0293136332329202,"FsyncsPerSec":12.79778232349229,"CheckpointsPerSec":6.398891161746145}
++{"Label":"flat","N":8,"Rate":0,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.002603615,"EchoP50Ms":1.021,"EchoP99Ms":5.902,"EchoMaxMs":8.205,"Keystrokes":1445,"OutputMBps":209.40625797256487,"AttachMBps":209.38282997231417,"SSELinesPerSec":1201071.0873300962,"CPUCores":1.1687798947134425,"PeakRSSMiB":62.875,"GCPauseP50Us":163.84,"GCPauseP99Us":6291.456,"GCPauseMaxUs":6291.456,"GCCycles":14,"HeapMiB":37.98998260498047,"WriteAmplification":1.0599852084098496,"FsyncsPerSec":98.97423092077612,"CheckpointsPerSec":49.58708943101511}
+diff --git a/bench/phosphor-v0.3.0/profile-macos.jsonl b/bench/phosphor-v0.3.0/profile-macos.jsonl
+new file mode 100644
+index 0000000..3d5fa26
+--- /dev/null
++++ b/bench/phosphor-v0.3.0/profile-macos.jsonl
+@@ -0,0 +1,2 @@
++{"Label":"agents","N":32,"Rate":1048576,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.004196875,"EchoP50Ms":0.102,"EchoP99Ms":1.289,"EchoMaxMs":3.56,"Keystrokes":1895,"OutputMBps":33.74774649264387,"AttachMBps":33.76101702316809,"SSELinesPerSec":193638.63228651226,"CPUCores":1.1133621358286194,"PeakRSSMiB":90.109375,"GCPauseP50Us":40.96,"GCPauseP99Us":98.304,"GCPauseMaxUs":98.304,"GCCycles":1,"HeapMiB":53.02666473388672,"WriteAmplification":1.0329143197171013,"FsyncsPerSec":12.794630253615436,"CheckpointsPerSec":6.397315126807718}
++{"Label":"flat","N":8,"Rate":0,"Attach":1,"Streams":1,"Persist":true,"Seconds":10.002107375,"EchoP50Ms":0.148,"EchoP99Ms":0.333,"EchoMaxMs":1.447,"Keystrokes":1864,"OutputMBps":117.43307444747363,"AttachMBps":117.4436058281168,"SSELinesPerSec":673657.5350951978,"CPUCores":3.692834381314568,"PeakRSSMiB":56.109375,"GCPauseP50Us":98.304,"GCPauseP99Us":4194.304,"GCPauseMaxUs":4194.304,"GCCycles":12,"HeapMiB":20.36920928955078,"WriteAmplification":1.0651425700708124,"FsyncsPerSec":56.58807477059303,"CheckpointsPerSec":28.294037385296516}
+diff --git a/cmd/ptyd/default.pgo b/cmd/ptyd/default.pgo
+index 68e580c..7d6869a 100644
+Binary files a/cmd/ptyd/default.pgo and b/cmd/ptyd/default.pgo differ
+diff --git a/go.mod b/go.mod
+index 696642a..abe0ce0 100644
+--- a/go.mod
++++ b/go.mod
+@@ -3,13 +3,10 @@ module github.com/2018kguo/ptyd
+ go 1.26.2
+ 
+ require (
+-	github.com/2018kguo/phosphor v0.2.0
++	github.com/2018kguo/phosphor v0.3.0
+ 	github.com/creack/pty v1.1.24
+ 	golang.org/x/sys v0.49.0
+ 	golang.org/x/term v0.47.0
+ )
+ 
+-require (
+-	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+-	github.com/mattn/go-runewidth v0.0.31 // indirect
+-)
++require github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+diff --git a/go.sum b/go.sum
+index 6266e47..bcfcf9d 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,11 +1,9 @@
+-github.com/2018kguo/phosphor v0.2.0 h1:H+O7LDg1+vPLUUFhYrE82Zu8cnZxCVShLGqiX2UtZQ0=
+-github.com/2018kguo/phosphor v0.2.0/go.mod h1:EtEgFQ/a4qYZPduFIolWAAubXeWBjHSSHhM2B0E2MbM=
++github.com/2018kguo/phosphor v0.3.0 h1:VdXVGXCzu6mWHXaEjhBTqK8JVaKDsE57DM+mw5NEkP8=
++github.com/2018kguo/phosphor v0.3.0/go.mod h1:1byNTXrlHQzoaBIWnkS9BLmTxg5DSresuJX0O3Kn+rI=
+ github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
+ github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
+ github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
+ github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
+-github.com/mattn/go-runewidth v0.0.31 h1:1oCV4ReTlosDBc6rYRw5cL8S/4y8iv5oRl4SJ5IBgwo=
+-github.com/mattn/go-runewidth v0.0.31/go.mod h1:3qAiGCV4Koz/yuveO58qUefmUTRm8r0IGEXZ9jeHp/8=
+ golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
+ golang.org/x/sys v0.49.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
+ golang.org/x/term v0.47.0 h1:cpyOwQkr2Nzxe2p6KnrTG7Ei2wtzjsuSjhpXXepZ/BM=
+diff --git a/internal/terminal/checkpoint.go b/internal/terminal/checkpoint.go
+index ff5961f..5415896 100644
+--- a/internal/terminal/checkpoint.go
++++ b/internal/terminal/checkpoint.go
+@@ -26,8 +26,8 @@ import (
+ // Screen persistence. With a persist dir, each terminal's directory holds:
+ //
+ //   - screen.ckpt: a checkpoint of the screen, one JSON header line
+-//     (ckptHeader) followed by the bytes that repaint the screen and its
+-//     scrollback. Written atomically (temp file, fsync, rename).
++//     (ckptHeader) followed by a phosphor snapshot of the exact emulator
++//     state. Written atomically (temp file, fsync, rename).
+ //   - tail.<gen>: everything the program printed since checkpoint <gen>
+ //     was taken, as records of one type byte, a 4-byte big-endian length
+ //     and a payload: recData (raw output) or recResize (cols, rows). The
+@@ -54,7 +54,7 @@ const (
+ 	maxTailBytes    = 4 << 20
+ 	ckptSettle      = time.Second
+ 	ckptMinInterval = 15 * time.Second
+-	ckptVersion     = 1
++	ckptVersion     = 2
+ )
+ 
+ // diskStats counts what persistence writes (reported by /metrics).
+@@ -291,7 +291,7 @@ func (t *terminal) checkpoint() {
+ 		return
+ 	}
+ 	cols, rows := t.screen.Size()
+-	body := t.screen.Repaint(true)
++	body := t.screen.Snapshot()
+ 	// Start a new tail generation; output from here on belongs to it.
+ 	old := p.tail
+ 	p.gen++
+@@ -312,7 +312,7 @@ func (t *terminal) checkpoint() {
+ }
+ 
+ // writeCheckpoint writes screen.ckpt: a screen of the given size whose
+-// repaint is body, followed by tails from generation gen on.
++// snapshot is body, followed by tails from generation gen on.
+ func writeCheckpoint(dir string, cols, rows int, gen uint64, body []byte) error {
+ 	hdr, _ := json.Marshal(ckptHeader{Version: ckptVersion, Cols: cols, Rows: rows, TailGen: gen, At: time.Now()})
+ 	return writeFileAtomic(filepath.Join(dir, ckptFile), append(append(hdr, '\n'), body...))
+@@ -379,17 +379,43 @@ func loadScreen(dir string, cols, rows int) (*phosphor.Terminal, uint64, error)
+ 	switch {
+ 	case err == nil:
+ 		line, rest, ok := bytes.Cut(raw, []byte("\n"))
+-		if !ok || json.Unmarshal(line, &hdr) != nil || hdr.Version != ckptVersion {
++		if !ok || json.Unmarshal(line, &hdr) != nil || (hdr.Version != 1 && hdr.Version != ckptVersion) {
+ 			return nil, 0, fmt.Errorf("corrupt checkpoint in %s", dir)
+ 		}
++		// Every released version 1 writer began with synchronized ANSI
++		// painting. A damaged version field must not reinterpret binary
++		// snapshot bytes as an old terminal stream.
++		if hdr.Version == 1 && !bytes.HasPrefix(rest, []byte("\x1b[?2026h")) {
++			return nil, 0, fmt.Errorf("checkpoint format differs from its version in %s", dir)
++		}
+ 		body = rest
+ 		cols, rows = hdr.Cols, hdr.Rows
+ 	case errors.Is(err, os.ErrNotExist):
+ 	default:
+ 		return nil, 0, err
+ 	}
+-	scr := phosphor.New(max(cols, 1), max(rows, 1))
+-	scr.Write(body)
++	var scr *phosphor.Terminal
++	if hdr.Version == ckptVersion {
++		scr = new(phosphor.Terminal)
++		// These are owner-only files written by this daemon. Preserve the
++		// existing uint16 PTY geometry and storage contract rather than
++		// imposing the library's smaller defaults on accepted sessions.
++		limits := phosphor.SnapshotLimits{
++			MaxBytes: int(^uint(0) >> 1),
++			MaxCells: int(min(uint64(^uint(0)>>1), uint64(65535)*65535)),
++		}
++		if err := scr.RestoreSnapshot(body, limits); err != nil {
++			return nil, 0, fmt.Errorf("corrupt checkpoint in %s: %w", dir, err)
++		}
++		if c, r := scr.Size(); c != cols || r != rows {
++			return nil, 0, fmt.Errorf("checkpoint dimensions differ in %s", dir)
++		}
++	} else {
++		// Version 1 was ANSI replay. Keep reading existing checkpoints;
++		// every new checkpoint uses the exact snapshot format.
++		scr = phosphor.New(max(cols, 1), max(rows, 1))
++		scr.Write(body)
++	}
+ 	next := hdr.TailGen
+ 	for _, g := range tailGens(dir) {
+ 		if g < hdr.TailGen {
+diff --git a/internal/terminal/exact_checkpoint_test.go b/internal/terminal/exact_checkpoint_test.go
+new file mode 100644
+index 0000000..bd4bb46
+--- /dev/null
++++ b/internal/terminal/exact_checkpoint_test.go
+@@ -0,0 +1,130 @@
++package terminal
++
++import (
++	"bytes"
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/2018kguo/phosphor"
++)
++
++func TestExactCheckpointContinuesThroughTail(t *testing.T) {
++	for _, tc := range []struct {
++		name, before, after string
++		cols, rows          int
++	}{
++		{"rep", "AB\x1b[2J\x1b[H", "\x1b[3b", 8, 4},
++		{"inactive-screen", "MAIN\x1b7\x1b[?1049h\x1b[31mALT\x1b7", "\x1b[?1049l!\x1b8X", 8, 4},
++		{"outside-origin", "A\x1b[2;3r\x1b[?69h\x1b[3;6s\x1b[?6hB\x1b[22J", "X", 8, 4},
++		{"grapheme", "\x1b[?2027hA❤️\x1b[?2027l", "\x1b[?2027h\ufe0eX", 3, 4},
++		{"partial-utf8", "X\xf0\x9f", "\x98\x80Y", 8, 4},
++		{"partial-csi", "X\x1b[38:2::1:2:", "3mY", 8, 4},
++		{"partial-osc", "X\x1b]8;id=x;https://example", ".com\x1b\\Y", 8, 4},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			dir := t.TempDir()
++			original := phosphor.New(tc.cols, tc.rows)
++			original.Write([]byte(tc.before))
++			term := &terminal{screen: original, persist: &persister{dir: dir}}
++			defer term.stopPersisting()
++			term.checkpoint()
++			term.persist.appendLocked(recData, []byte(tc.after))
++			original.Write([]byte(tc.after))
++			term.persist.appendLocked(recResize, []byte{0, 9, 0, 5})
++			original.Resize(9, 5)
++			term.persist.appendLocked(recData, []byte("\r\ncontinued"))
++			original.Write([]byte("\r\ncontinued"))
++			term.persist.tail.close()
++			restored, next, err := loadScreen(dir, 1, 1)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if next != 2 || !bytes.Equal(restored.Snapshot(), original.Snapshot()) {
++				t.Fatalf("checkpoint plus tail lost emulator state (next=%d)", next)
++			}
++		})
++	}
++}
++
++func TestLegacyCheckpointRemainsReadable(t *testing.T) {
++	dir := t.TempDir()
++	original := phosphor.New(8, 4)
++	original.Write([]byte("old\r\ncheckpoint\x1b[3"))
++	header, err := json.Marshal(ckptHeader{Version: 1, Cols: 8, Rows: 4, TailGen: 7})
++	if err != nil {
++		t.Fatal(err)
++	}
++	raw := append(append(header, '\n'), original.Repaint(true)...)
++	if err := os.WriteFile(filepath.Join(dir, ckptFile), raw, 0600); err != nil {
++		t.Fatal(err)
++	}
++	restored, gen, err := loadScreen(dir, 1, 1)
++	if err != nil || gen != 7 {
++		t.Fatalf("legacy restore: gen %d, err %v", gen, err)
++	}
++	original.Write([]byte("1mcontinued"))
++	restored.Write([]byte("1mcontinued"))
++	if !bytes.Equal(original.Repaint(true), restored.Repaint(true)) {
++		t.Fatal("legacy checkpoint lost continuation")
++	}
++	if got, err := os.ReadFile(filepath.Join(dir, ckptFile)); err != nil || !bytes.Equal(got, raw) {
++		t.Fatal("reading legacy checkpoint rewrote it")
++	}
++}
++
++func TestExactCheckpointRejectsCorruption(t *testing.T) {
++	for _, mismatch := range []bool{false, true} {
++		dir := t.TempDir()
++		scr := phosphor.New(8, 4)
++		body := scr.Snapshot()
++		cols := 8
++		if mismatch {
++			cols++
++		} else {
++			body[len(body)-1] ^= 1
++		}
++		if err := writeCheckpoint(dir, cols, 4, 1, body); err != nil {
++			t.Fatal(err)
++		}
++		if _, _, err := loadScreen(dir, 8, 4); err == nil {
++			t.Fatalf("accepted corrupt checkpoint (dimension mismatch %v)", mismatch)
++		}
++	}
++}
++
++func TestExactCheckpointKeepsAcceptedGeometry(t *testing.T) {
++	dir := t.TempDir()
++	// Sparse screens at this supported uint16 geometry exceed the
++	// library's default virtual-cell limit without using large cell rows.
++	scr := phosphor.New(3000, 2000)
++	if err := writeCheckpoint(dir, 3000, 2000, 1, scr.Snapshot()); err != nil {
++		t.Fatal(err)
++	}
++	got, _, err := loadScreen(dir, 1, 1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if c, r := got.Size(); c != 3000 || r != 2000 {
++		t.Fatalf("restored dimensions %dx%d", c, r)
++	}
++}
++
++func TestCheckpointRejectsChangedVersion(t *testing.T) {
++	dir := t.TempDir()
++	scr := phosphor.New(8, 4)
++	header, err := json.Marshal(ckptHeader{Version: 1, Cols: 8, Rows: 4, TailGen: 1})
++	if err != nil {
++		t.Fatal(err)
++	}
++	// A version 2 body under a version 1 header must not silently become
++	// ANSI input, even though old checkpoints remain readable.
++	raw := append(append(header, '\n'), scr.Snapshot()...)
++	if err := os.WriteFile(filepath.Join(dir, ckptFile), raw, 0600); err != nil {
++		t.Fatal(err)
++	}
++	if _, _, err := loadScreen(dir, 8, 4); err == nil {
++		t.Fatal("accepted snapshot body as legacy ANSI")
++	}
++}
+diff --git a/internal/terminal/hotpath_bench_test.go b/internal/terminal/hotpath_bench_test.go
+index 108beae..cf156cc 100644
+--- a/internal/terminal/hotpath_bench_test.go
++++ b/internal/terminal/hotpath_bench_test.go
+@@ -203,7 +203,7 @@ func writeGhost(b *testing.B, persistDir string, i int, ckpt []byte, tail []byte
+ func BenchmarkLoadScreen(b *testing.B) {
+ 	full := phosphor.New(120, 40)
+ 	full.Write(benchdata.Claude(4<<20, 120, 40))
+-	ckpt := full.Repaint(true)
++	ckpt := full.Snapshot()
+ 	for _, tailBytes := range []int{0, 1 << 20, maxTailBytes} {
+ 		b.Run("tail="+strconv.Itoa(tailBytes>>10)+"KiB", func(b *testing.B) {
+ 			pd := b.TempDir()
+@@ -228,7 +228,7 @@ func BenchmarkStartup1000(b *testing.B) {
+ 	const n = 1000
+ 	full := phosphor.New(120, 40)
+ 	full.Write(benchdata.Claude(1<<20, 120, 40))
+-	ckpt := full.Repaint(true)
++	ckpt := full.Snapshot()
+ 	tail := benchdata.Claude(64<<10, 120, 40)
+ 	pd := b.TempDir()
+ 	for i := range n {
+diff --git a/internal/terminal/restore.go b/internal/terminal/restore.go
+index 1c38f54..2b7a8cf 100644
+--- a/internal/terminal/restore.go
++++ b/internal/terminal/restore.go
+@@ -181,7 +181,7 @@ func (m *Manager) decline(id ID, scr *phosphor.Terminal, gen uint64, notice stri
+ 	dir := terminalDir(m.opts.PersistDir, id)
+ 	writeNotice(scr, notice, true)
+ 	cols, rows := scr.Size()
+-	if err := writeCheckpoint(dir, cols, rows, gen+1, scr.Repaint(true)); err == nil {
++	if err := writeCheckpoint(dir, cols, rows, gen+1, scr.Snapshot()); err == nil {
+ 		removeTailsBefore(dir, gen+1)
+ 	}
+ 	if err := writeExit(m.opts.PersistDir, id, nil, exitNotRestored, notice); err != nil {
