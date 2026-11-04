@@ -6,11 +6,11 @@ description: Turn a PR, branch diff or stack into a guided review (chapters in r
 # prtour
 
 You write the tour; `prtour` fetches the diff, checks your tour against it, and
-renders it. Run it with `npx -y github:2018kguo/prtour <command>` (no install needed).
+renders it. Run it with `npx -y prtour <command>` (no install needed).
 
 ## Workflow
 
-1. **Fetch and scaffold.** `npx -y github:2018kguo/prtour init <target>`
+1. **Fetch and scaffold.** `npx -y prtour init <target>`
    - target: PR number, PR URL, `owner/repo#123`, a git range (`main...HEAD`),
      a `.patch` file, `-` for stdin, or nothing (this branch plus uncommitted
      changes against the default branch).
@@ -59,7 +59,7 @@ renders it. Run it with `npx -y github:2018kguo/prtour <command>` (no install ne
    `{"path": "...", "lines": [[120, 160], [300, 310]]}` (new-file line
    numbers). The rest of a partly shown file goes to "Not in review" on its
    own, so you don't need to list it under `hidden`.
-   `npx -y github:2018kguo/prtour hunks <path-substring> --lines` prints each hunk's index and
+   `npx -y prtour hunks <path-substring> --lines` prints each hunk's index and
    line range, and every line with its old and new line numbers. Use it to
    pick hunks and to anchor notes; don't count lines by hand.
 4. **Annotate.** Add one note per decision or risk, in reading order (notes
@@ -118,22 +118,22 @@ terms.
 `check` runs a lint for these tells (ported from Sprout) on every text field
 and reports each hit with a fix.
 
-5. **Check.** Run `npx -y github:2018kguo/prtour check`. It exits 1 and names the problem when a
+5. **Check.** Run `npx -y prtour check`. It exits 1 and names the problem when a
    file is unplaced, a path is wrong, a note points at a line that isn't
    shown, the tour is over budget, or the writing trips the lint. Fix it until
    the check is clean. Don't rephrase just to dodge the lint; write the
    sentence plainly.
 6. **Deliver**, depending on where you are:
-   - Local with a human: `npx -y github:2018kguo/prtour open` serves the page with live reload.
+   - Local with a human: `npx -y prtour open` serves the page with live reload.
      Every save of `tour.json` refreshes the page. Comments the reviewer leaves
      on lines, notes or chapters go to `feedback.json`; read them with
-     `npx -y github:2018kguo/prtour feedback`, then address them.
-   - Cloud or headless agent: `npx -y github:2018kguo/prtour render -o review.html` writes one
+     `npx -y prtour feedback`, then address them.
+   - Cloud or headless agent: `npx -y prtour render -o review.html` writes one
      self-contained file. It needs no server or network, and it works as an
      artifact, an attachment or a static page. In a PR comment, post
-     `npx -y github:2018kguo/prtour render --format md` (add `--link <url>` if the HTML is hosted).
-   - Terminal: `npx -y github:2018kguo/prtour show`.
-   - PDF: `npx -y github:2018kguo/prtour render --format pdf` (needs Chrome, Chromium or Edge).
+     `npx -y prtour render --format md` (add `--link <url>` if the HTML is hosted).
+   - Terminal: `npx -y prtour show`.
+   - PDF: `npx -y prtour render --format pdf` (needs Chrome, Chromium or Edge).
    In your reply, list what you hid and why (dependencies and manifest changes
    in one line), and give the reading order as `n/N file:line`.
 
@@ -144,7 +144,7 @@ stretch of work. Write for someone who wasn't there: lead with what people
 lived through, explain why it happened in plain words, show the result, and
 keep the engineering detail one click away.
 
-1. `npx -y github:2018kguo/prtour recap --author <login>[,<login>…] --since YYYY-MM-DD [--until …] [--repo o/r]`
+1. `npx -y prtour recap --author <login>[,<login>…] --since YYYY-MM-DD [--until …] [--repo o/r]`
    writes `recap.json` with every merged PR, plus `context/<number>.md` per PR:
    the description, the largest files, and what the person typed to the agent
    lane that opened it (from local Claude Code / Codex transcripts; lane names

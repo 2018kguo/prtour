@@ -28,8 +28,8 @@ One `tour.json` renders four ways:
 
 ## Run it
 
-Not on npm yet; run it straight from GitHub (`npx -y github:2018kguo/prtour …`)
-or `npm i -g github:2018kguo/prtour` and use `prtour`.
+Needs Node 20 or newer. Run it with `npx`, or `npm i -g prtour` to keep a
+`prtour` command around.
 
 ```sh
 npx prtour 123          # PR in this repo → scaffold → opens in the browser
@@ -57,15 +57,15 @@ npx skills add 2018kguo/prtour
 **Without installing anything**, the instructions ship with the tool:
 
 ```sh
-npx -y github:2018kguo/prtour skill             # print them (pipe into any agent)
-npx -y github:2018kguo/prtour skill --install   # write .claude/skills/prtour/SKILL.md
+npx -y prtour skill             # print them (pipe into any agent)
+npx -y prtour skill --install   # write .claude/skills/prtour/SKILL.md
 ```
 
 Or add one line to `AGENTS.md` / `CLAUDE.md`. This works for cloud agents too,
 since all they need is `npx`:
 
 ```md
-For a guided review of a diff, run `npx -y github:2018kguo/prtour skill` and follow it.
+For a guided review of a diff, run `npx -y prtour skill` and follow it.
 ```
 
 Then ask: *"open this PR in prtour"*, *"make a guided review of #123 and attach
