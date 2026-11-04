@@ -18,7 +18,7 @@ import { sliceHunk, splitPatch } from './patch.mjs';
 
 export const RECAP_BUDGET = { workstreams: 12 };
 const PALETTE = ['oklch(55% .15 155)', 'oklch(55% .17 255)', 'oklch(66% .15 65)', 'oklch(53% .19 293)', 'oklch(57% .19 22)', 'oklch(58% .11 210)', 'oklch(52% .09 125)', 'oklch(50% .14 330)', 'oklch(62% .13 40)', 'oklch(48% .05 260)', 'oklch(60% .12 180)', 'oklch(55% .12 90)'];
-const KINDS = { fix: 'What was broken, now fixed', feature: "What's new", improvement: 'What got better' };
+const KINDS = { fix: 'Fixes', feature: 'New features', improvement: 'Improvements' };
 const kindOfWs = (w) => (w.kind === 'feature' || w.kind === 'improvement' ? w.kind : 'fix');
 
 // Area = the first two path segments of where most of a PR's lines went, ignoring tests and generated files.
@@ -31,6 +31,13 @@ export function areaOf(files) {
   }
   return [...by].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 'other';
 }
+
+const spanOf = (items) => {
+  const ds = items.map((p) => day(p.mergedAt)).filter(Boolean).sort();
+  if (!ds.length) return '';
+  const a = fmtDay(ds[0]), b = fmtDay(ds.at(-1));
+  return a === b ? a : `${a} to ${b}`;
+};
 
 export function scaffoldRecap(prs, meta) {
   return {
@@ -193,9 +200,6 @@ async function diffSnippet(d, r, state) {
 async function section(w, r, state) {
   const rc = r.rc;
   const ic = w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : '';
-  const lanes = new Map();
-  for (const p of w.items) if (p.lane) lanes.set(p.lane, (lanes.get(p.lane) ?? 0) + 1);
-  const laneText = [...lanes].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, c]) => `${esc((rc.lanes ?? {})[k] ?? k)} (${c})`).join(', ');
   const wins = (w.wins ?? []).map((x) => (typeof x === 'string' ? { text: x } : x));
   const visuals = [timelineHTML(w.timeline, rc), chartHTML(w.chart, rc),
     w.diagram?.nodes?.length ? `<figure class="fig">${diagramToggle(w.diagram, () => '#', r.icons)}${w.diagram.caption ? `<figcaption>${inline(w.diagram.caption, rc)}</figcaption>` : ''}</figure>` : '',
@@ -209,7 +213,7 @@ async function section(w, r, state) {
     w.trade ? `<div class="dt"><p><b>The trade.</b> ${inline(w.trade, rc)}</p></div>` : ''].filter(Boolean).join('');
   return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
 <h2 class="ws-title">${ic}${esc(w.title ?? w.name)}</h2>
-<p class="ws-meta">${esc(w.name)} · ${w.items.length} PR${w.items.length === 1 ? '' : 's'}${laneText ? ` · agent lanes: ${laneText}` : ''}${w.asked ? `<br>${rc.askedBy ? `What ${esc(rc.askedBy)} asked for` : 'Asked for'}: ${esc(w.asked)}` : ''}</p>
+<p class="ws-meta">${w.items.length} PR${w.items.length === 1 ? '' : 's'}, merged ${spanOf(w.items)}${w.asked ? `. ${rc.askedBy ? `${esc(rc.askedBy)} asked for` : 'Asked for'}: ${esc(w.asked)}` : ''}</p>
 <div class="pair"><div><h3>${beforeLabel}</h3><p class="pair-lead">${inline(w.symptom ?? '', rc)}</p>${w.howBad ? `<p>${inline(w.howBad, rc)}</p>` : ''}</div><div><h3 class="now">${nowLabel}</h3><p class="pair-lead">${inline(w.now ?? w.whyItMatters ?? '', rc)}</p></div></div>
 ${w.explain ? `<h3>Why it happened</h3>${prose(w.explain, rc)}` : ''}
 ${visuals[0] ?? ''}
@@ -220,7 +224,7 @@ ${diffs.filter(Boolean).length ? `<h3>The change, in code</h3>${diffs.join('')}`
 ${w.designCall ? `<h3>The idea that made it work</h3>${prose(w.designCall, rc)}` : ''}
 ${w.triedFirst ? `<h3>What we tried first</h3>${prose(w.triedFirst, rc)}` : ''}
 ${detailItems ? `<details class="more"><summary>Engineering details</summary><div class="more-body">${detailItems}</div></details>` : ''}
-<details class="more"><summary>All ${w.items.length} PRs</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>
+<details class="more prs-more"><summary>All ${w.items.length} PRs</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>
 </section>`;
 }
 
@@ -377,7 +381,8 @@ a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decora
 .appendix{margin-top:80px}footer{margin-top:48px;color:var(--muted-foreground);font-size:15px}
 pre.mermaid{margin:0;font:14px var(--font-mono);color:var(--muted-foreground);white-space:pre-wrap}pre.mermaid[data-processed]{color:inherit;display:flex;justify-content:center}
 @media (max-width:700px){.pair,.daynotes{grid-template-columns:1fr}.hero h1{font-size:32px}}
-@media print{body{font-size:12pt}.part,.ws{break-before:page}.part+.ws{break-before:avoid}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table{break-inside:avoid}}
+@page{margin:12mm 14mm}
+@media print{body{font-size:10pt;line-height:1.45}.doc{max-width:none;padding:0}.ws{padding-top:18px;margin-top:0}.part{break-before:page;margin-top:0}.ws-title{font-size:16pt}h3{font-size:11pt;margin:10px 0 4px}p{margin:4px 0}.fig,.diff-snip{margin:8px 0}h2,h3{break-after:avoid}#all-prs,.prs-more{display:none}.part{break-before:auto!important;margin-top:20px}.dt{margin:4px 0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table{break-inside:avoid}}
 `;
 
 export function renderRecapMarkdown(r) {

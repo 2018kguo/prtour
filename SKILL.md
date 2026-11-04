@@ -160,7 +160,10 @@ keep the engineering detail one click away.
    one-line `otherPrs`. Check coverage: every user-visible change should land
    in a workstream.
 3. Each workstream, top to bottom (this is the order readers see):
-   - `title`: the outcome, in plain words.
+   - `title`: a newspaper headline. Say who or what changed and by how much,
+     with the number ("One tracked edit on a 251-page Word document: 12.5 s
+     before, under 0.52 s now"). No paired slogans ("X reads Y, and Z stays
+     W"), no cleverness, nothing a reader can't check.
    - `symptom` and `howBad`: what people saw, and how often or how badly,
      with a sourced number. `now`: what they get today.
    - `explain`: why it happened, for a smart non-engineer. Name the concept
