@@ -1,6 +1,6 @@
 {
   "name": "prtour",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Guided, agent-written PR reviews and recaps: chapters, a before/after map, numbered notes, noise hidden. One self-contained HTML file, PDF, Markdown or terminal.",
   "type": "module",
   "bin": {

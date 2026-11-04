@@ -14,7 +14,7 @@ PR becomes the 400 lines a maintainer needs to read. Pointed at weeks of
 merged PRs instead, it writes a recap of what got fixed, what is new and what
 got better.
 
-![A guided review: chapter with numbered agent notes inline](docs/tour.png)
+![A guided review with its Before/After flow, then a recap's timeline playing](docs/demo.gif)
 
 Live examples, both from the public [ptyd](https://github.com/2018kguo/ptyd) repo:
 a [guided review of PR #11](https://2018kguo.github.io/prtour/examples/ptyd-tour/) and a [recap of its first week](https://2018kguo.github.io/prtour/examples/ptyd-recap/)
@@ -72,8 +72,18 @@ since all they need is `npx`:
 For a guided review of a diff, run `npx -y prtour skill` and follow it.
 ```
 
-Then ask: *"open this PR in prtour"*, *"make a guided review of #123 and attach
-it"*, *"walk me through this branch"*.
+Then paste one of these to your agent:
+
+```text
+Make a guided review of PR #123 with npx -y prtour (run `npx -y prtour skill` first), open it for me, and post the notes on the PR.
+```
+
+```text
+Recap what <login> merged in <owner/repo> since <YYYY-MM-DD> with npx -y prtour (run `npx -y prtour skill` first). Render HTML and PDF.
+```
+
+Shorter asks work too: *"open this PR in prtour"*, *"walk me through this
+branch"*.
 
 The agent:
 
@@ -90,12 +100,16 @@ The agent:
    - **Locally**: `prtour open` serves the page with live reload. You comment
      on any line, note or chapter, the comments go to `feedback.json`, and the
      agent reads them with `prtour feedback`.
+   - **On the PR**: `prtour post` posts one GitHub review with each note as
+     an inline comment on its line, and the summary on top. `--link <url>`
+     links the full page, and `--dry-run` prints the review without posting.
+     A stack gets one review per PR.
    - **Cloud agents**: `prtour render -o review.html` (attach it) and
      `prtour render --format md` (post it).
 
 ## What the page does
 
-![Overview: summary, flow and reading order](docs/tour-overview.png)
+![A guided review: chapter with numbered agent notes inline](docs/tour.png)
 
 - Overview: the summary, the flow of the change, the reading order of notes,
   and what was left out and why.
@@ -155,6 +169,7 @@ prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf; -
 prtour show [dir]          terminal view
 prtour open [dir]          live-reload server + reviewer feedback
 prtour feedback [dir]      reviewer comments as Markdown (--clear)
+prtour post [dir]          notes as an inline GitHub review (--link, --dry-run)
 prtour recap               what shipped across many PRs (--author, --since, --until, --repo, --no-lanes)
 prtour skill [--install]   agent instructions
 

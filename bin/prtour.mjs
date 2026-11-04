@@ -33,6 +33,8 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
   prtour feedback [dir]      print reviewer comments as Markdown (--clear to reset)
   prtour recap               what shipped: merged PRs by one author over days, graphics first
            --author <login> --since YYYY-MM-DD [--until] [--repo o/r]   (default: you, last 7 days)
+  prtour post [dir]          post the notes as a GitHub review, each on its line (one per PR)
+           --link <url>      link the full tour   --dry-run  print the review, post nothing
   prtour skill [--install]   print the agent skill (or write .claude/skills/prtour/SKILL.md)
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
@@ -401,6 +403,34 @@ async function serve(dir, flags) {
   server.listen(port, '127.0.0.1');
 }
 
+// One GitHub review per PR: each note on its line, notes off the diff and the summary in the body.
+function post(dir, flags) {
+  if (isRecap(dir)) die('post works on tours; share a recap as a file or link');
+  const r = load(dir);
+  const t = r.tour;
+  const prs = t.parts ? t.parts.filter((p) => p.number) : t.number ? [{ key: undefined, number: t.number, title: t.title }] : [];
+  if (!t.repo || !prs.length) die('this tour is not from a GitHub PR; init it with a PR number or URL');
+  const fmt = (n) => `**${n.n}. ${n.title}**${n.body ? `\n\n${n.body}` : ''}`;
+  for (const p of prs) {
+    const notes = r.notes.filter((n) => (n.entry?.file.part ?? undefined) === p.key || (!n.entry && prs.length === 1));
+    const inline = notes.filter((n) => n.anchored && n.line != null);
+    const body = (rest) => [`**Guided review${t.parts ? ` of #${p.number}` : ''}**${flags.link ? `: ${flags.link}` : ''}`, t.summary,
+      ...rest.map((n) => `${fmt(n)}${n.line != null ? `\n\n\`${n.entry?.file.name ?? n.file}:${n.line}\`` : ''}`), '<sub>Posted with prtour</sub>'].filter(Boolean).join('\n\n');
+    const review = {
+      commit_id: JSON.parse(sh('gh', ['pr', 'view', String(p.number), '-R', t.repo, '--json', 'headRefOid'])).headRefOid,
+      event: 'COMMENT',
+      body: body(notes.filter((n) => !inline.includes(n))),
+      comments: inline.map((n) => ({ path: n.entry.file.name, line: n.line, side: n.side === 'deletions' ? 'LEFT' : 'RIGHT', body: fmt(n) })),
+    };
+    if (flags['dry-run']) { console.log(JSON.stringify({ pr: `${t.repo}#${p.number}`, ...review }, null, 2)); continue; }
+    const send = (x) => JSON.parse(sh('gh', ['api', `repos/${t.repo}/pulls/${p.number}/reviews`, '--input', '-'], { input: JSON.stringify(x) }));
+    let res;
+    // ponytail: GitHub rejects the whole review if one line left the diff (new pushes); fall back to every note in the body
+    try { res = send(review); } catch { res = send({ ...review, body: body(notes), comments: [] }); console.error('prtour: some lines are no longer in the PR diff, so every note went in the review body'); }
+    console.log(res.html_url);
+  }
+}
+
 function skill(flags) {
   const text = fs.readFileSync(path.join(ROOT, 'skills', 'prtour', 'SKILL.md'), 'utf8');
   if (!flags.install) return process.stdout.write(text);
@@ -420,6 +450,7 @@ const COMMANDS = {
   check: () => check(findDir(flags.dir ?? pos[0])),
   hunks: () => hunks(findDir(flags.dir), pos, flags),
   feedback: () => feedback(findDir(flags.dir ?? pos[0]), flags),
+  post: () => post(findDir(flags.dir ?? pos[0]), flags),
   skill: () => skill(flags),
   recap: () => recap(flags),
 };

@@ -132,6 +132,11 @@ and reports each hit with a fix.
      self-contained file. It needs no server or network, and it works as an
      artifact, an attachment or a static page. In a PR comment, post
      `npx -y prtour render --format md` (add `--link <url>` if the HTML is hosted).
+   - On the PR, when the person asks: `npx -y prtour post --dry-run` shows
+     the review, then `npx -y prtour post [--link <url>]` posts it: each
+     anchored note as an inline comment on its line, the rest and the summary
+     in the review body. A stack gets one review per PR. Posting is public, so
+     post only when asked.
    - Terminal: `npx -y prtour show`.
    - PDF: `npx -y prtour render --format pdf` (needs Chrome, Chromium or Edge).
    In your reply, list what you hid and why (dependencies and manifest changes
