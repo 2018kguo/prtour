@@ -20,7 +20,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
-      - run: npm publish --provenance --access public
+      - run: npm view "prtour@${GITHUB_REF_NAME#v}" version || npm publish --provenance --access public
       - run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

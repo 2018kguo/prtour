@@ -1,0 +1,3436 @@
+diff --git a/README.md b/README.md
+index ef24b56..a6a0caa 100644
+--- a/README.md
++++ b/README.md
+@@ -90,8 +90,8 @@ agent. The selection follows its session id as rows reorder.
+ 
+ Attention means a configured watch matched output. Running and idle time
+ are process observations; they do not classify an agent's thoughts.
+-The overview covers sessions managed by this daemon. It does not discover
+-unrelated agent sessions elsewhere on your machine.
++The default overview covers sessions managed by this daemon. Add `--discover`
++to include native Codex and Claude sessions started in other tabs.
+ 
+ Agents can call `GET /overview` with a row limit, text filter and tags.
+ Counts cover every matching session; `truncated` says when rows were omitted.
+@@ -100,6 +100,28 @@ truncation flag. [The reference](docs/reference.md#session-overview) explains
+ the fields. The live interaction was informed by
+ [AgentView](https://github.com/moritzWa/agentview).
+ 
++## Bring existing agents into one pane
++
++```sh
++ptyd agents                         # native sessions and what can be imported
++ptyd status --watch --discover      # managed terminals and native agents together
++```
++
++Select an outside session and press Enter. Ptyd opens a terminal view using
++that agent's native attach API, with its exact conversation id. Ctrl-\ twice
++returns to the picker and releases the view; the native worker keeps running.
++Your original tab stays open until you close it yourself.
++
++Codex sessions must be loaded in its shared local daemon. For a foreground
++Claude session, run `/bg` in its original tab and let Claude finish its own
++handoff, then refresh the picker. A stopped Claude conversation requires
++an explicit `ptyd import --resume` using the reference printed by `ptyd agents`.
++
++Ptyd rechecks native identity around view creation. It refuses incomplete or
++ambiguous listings and never resumes “the latest” conversation. Native CLIs
++redraw their own history; the original tab's terminal scrollback is not
++transferred. See [import behavior and limits](docs/reference.md#import-native-agent-sessions).
++
+ ## Drive a terminal from a script
+ 
+ The CLI and HTTP API control the same sessions. For example:
+diff --git a/cmd/ptyd/agents.go b/cmd/ptyd/agents.go
+new file mode 100644
+index 0000000..5c70d2c
+--- /dev/null
++++ b/cmd/ptyd/agents.go
+@@ -0,0 +1,87 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"os"
++	"strings"
++	"text/tabwriter"
++	"time"
++
++	"github.com/2018kguo/ptyd/internal/native"
++	"github.com/2018kguo/ptyd/internal/terminal"
++	"golang.org/x/term"
++)
++
++func runAgents(args []string) int {
++	fs, addr := newFlags("agents", "[--json]", "Discover existing Codex and Claude sessions without starting workers.\nUse status --watch --discover for the combined picker.")
++	asJSON := fs.Bool("json", false, "Print native sessions, import actions and discovery failures as JSON")
++	_ = fs.Parse(args)
++	if fs.NArg() != 0 {
++		fs.Usage()
++		return 2
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
++	defer cancel()
++	listing, err := apiAt(*addr).Agents(ctx)
++	if err != nil {
++		return fail(err)
++	}
++	if *asJSON {
++		if err = json.NewEncoder(os.Stdout).Encode(listing); err != nil {
++			return fail(err)
++		}
++		return 0
++	}
++	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
++	fmt.Fprintln(tw, "SESSION\tNAME\tSTATE\tACTION\tDIRECTORY")
++	for _, s := range listing.Sessions {
++		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.Ref.Key(), displayText(s.Name, 50), displayText(s.Status, 24), s.Action, displayText(s.CWD, 60))
++	}
++	_ = tw.Flush()
++	for _, issue := range listing.Issues {
++		fmt.Fprintf(os.Stderr, "%s: %s\n", issue.Provider, displayText(issue.Message, 300))
++	}
++	if listing.Truncated {
++		fmt.Fprintln(os.Stderr, "Native discovery was truncated; some sessions are omitted.")
++	}
++	return 0
++}
++func runImport(args []string) int {
++	fs, addr := newFlags("import", "[-d] [-n name] [--resume] <codex:UUID|claude:UUID>", "Open a ptyd frontend for an exact existing agent conversation.\nClaude foreground sessions must first run /bg in their original tab.\nClosing this frontend does not stop its native daemon's worker.")
++	detached := fs.Bool("d", false, "Print the terminal id without attaching")
++	name := fs.String("n", "", "Name for the terminal")
++	resume := fs.Bool("resume", false, "Allow restarting a stopped Claude background conversation")
++	_ = fs.Parse(args)
++	if fs.NArg() != 1 {
++		fs.Usage()
++		return 2
++	}
++	provider, id, ok := strings.Cut(fs.Arg(0), ":")
++	ref := native.Ref{Provider: native.Provider(provider), ID: id}
++	if !ok {
++		return fail(fmt.Errorf("use the exact provider:UUID printed by ptyd agents"))
++	}
++	if err := ref.Validate(); err != nil {
++		return fail(err)
++	}
++	request := terminal.ImportRequest{Ref: ref, Name: *name, Resume: *resume}
++	if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
++		request.Cols = uint16(cols)
++		request.Rows = uint16(rows)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
++	defer cancel()
++	c := apiAt(*addr)
++	imported, err := c.ImportAgent(ctx, request)
++	if err != nil {
++		return fail(err)
++	}
++	if *detached || !term.IsTerminal(int(os.Stdout.Fd())) {
++		fmt.Println(imported.Terminal.ID)
++		return 0
++	}
++	code, _ := attach(context.Background(), c, imported.Terminal, false, nil)
++	return code
++}
+diff --git a/cmd/ptyd/cli.go b/cmd/ptyd/cli.go
+index b12eb67..e9fd46e 100644
+--- a/cmd/ptyd/cli.go
++++ b/cmd/ptyd/cli.go
+@@ -27,7 +27,11 @@ Usage:
+   ptyd new [-n name] [-d] [--restore auto|none|rerun|agent] [command [args...]]
+                                    start a terminal ($SHELL by default) and attach
+   ptyd ls                          list terminals
+-  ptyd status [--json | --watch]    attention-first session overview
++  ptyd status [--json | --watch] [--discover]
++                                   attention-first session overview
++  ptyd agents [--json]              discover native Codex and Claude sessions
++  ptyd import [-d] [-n name] [--resume] <codex:UUID|claude:UUID>
++                                   import an existing agent conversation
+   ptyd attach [--readonly] <terminal>
+   ptyd restore [--policy auto|rerun|agent] <terminal>
+                                    start a stopped or exited terminal again and attach
+@@ -52,6 +56,8 @@ var commands = map[string]func(args []string) int{
+ 	"new":     runNew,
+ 	"ls":      runLs,
+ 	"status":  runStatus,
++	"agents":  runAgents,
++	"import":  runImport,
+ 	"attach":  runAttach,
+ 	"kill":    runKill,
+ 	"restore": runRestore,
+diff --git a/cmd/ptyd/status.go b/cmd/ptyd/status.go
+index 814eedd..56f9793 100644
+--- a/cmd/ptyd/status.go
++++ b/cmd/ptyd/status.go
+@@ -16,15 +16,17 @@ import (
+ 
+ 	"github.com/2018kguo/phosphor"
+ 	"github.com/2018kguo/ptyd/internal/client"
++	"github.com/2018kguo/ptyd/internal/native"
+ 	"github.com/2018kguo/ptyd/internal/terminal"
+ 	"golang.org/x/term"
+ )
+ 
+ func runStatus(args []string) int {
+-	fs, addr := newFlags("status", "[--json | --watch] [--limit N] [--filter text] [--tag tags]",
++	fs, addr := newFlags("status", "[--json | --watch] [--discover] [--limit N] [--filter text] [--tag tags]",
+ 		"See attention, running and stopped sessions. --json returns a compact snapshot.\n"+
+ 			"--watch opens a live selector: arrows or j/k, Enter to attach, / to filter, q to quit.")
+ 	asJSON := fs.Bool("json", false, "Print structured JSON for agents")
++	discover := fs.Bool("discover", false, "Include native Codex and Claude sessions started outside ptyd")
+ 	watch := fs.Bool("watch", false, "Open the live terminal overview")
+ 	limit := fs.Int("limit", terminal.DefaultOverviewLimit, "Maximum rows (counts include every match)")
+ 	query := fs.String("filter", "", "Match id, name, directory, command or agent")
+@@ -34,7 +36,7 @@ func runStatus(args []string) int {
+ 		fs.Usage()
+ 		return 2
+ 	}
+-	options := terminal.OverviewOptions{Limit: *limit, Query: *query}
++	options := terminal.OverviewOptions{Limit: *limit, Query: *query, Discover: *discover}
+ 	for _, tag := range strings.Split(*tags, ",") {
+ 		if tag = strings.TrimSpace(tag); tag != "" {
+ 			options.Tags = append(options.Tags, tag)
+@@ -64,6 +66,9 @@ func runStatus(args []string) int {
+ }
+ 
+ func overviewState(row terminal.SessionSummary) string {
++	if row.External != nil {
++		return "outside: " + displayText(row.External.Status, 24)
++	}
+ 	if row.State == terminal.OverviewRunning {
+ 		return "running"
+ 	}
+@@ -82,6 +87,15 @@ func overviewState(row terminal.SessionSummary) string {
+ func overviewCounts(view terminal.Overview) string {
+ 	c := view.Counts
+ 	text := fmt.Sprintf("%d sessions | %d attention | %d running | %d stopped | %d exited", c.Total, c.Attention, c.Running, c.Stopped, c.Exited)
++	if c.External > 0 {
++		text += fmt.Sprintf(" | %d outside ptyd", c.External)
++	}
++	if view.DiscoveryTruncated {
++		text += " | native discovery truncated"
++	}
++	if len(view.DiscoveryIssues) > 0 {
++		text += " | native discovery incomplete"
++	}
+ 	if view.Truncated {
+ 		text += fmt.Sprintf(" | showing %d", len(view.Sessions))
+ 	}
+@@ -113,6 +127,9 @@ func printStatus(w io.Writer, view terminal.Overview) {
+ 			displayText(row.CWD, 60), displayText(preview, 80))
+ 	}
+ 	_ = tw.Flush()
++	for _, issue := range view.DiscoveryIssues {
++		fmt.Fprintf(w, "%s: %s\n", issue.Provider, displayText(issue.Message, 200))
++	}
+ }
+ 
+ // displayText cannot carry terminal controls from a session into the overview.
+@@ -213,8 +230,14 @@ func (v *statusView) move(delta int) {
+ func refreshStatus(ctx context.Context, c client.API, options terminal.OverviewOptions, queries <-chan string, updates chan statusResult) {
+ 	ticker := time.NewTicker(time.Second)
+ 	defer ticker.Stop()
++	requestBudget := 2 * time.Second
++	if options.Discover {
++		// Cold discovery allows bounded native probes to finish and report
++		// partial failure. Input/navigation stay on the independent UI loop.
++		requestBudget = 12 * time.Second
++	}
+ 	for {
+-		req, cancel := context.WithTimeout(ctx, 2*time.Second)
++		req, cancel := context.WithTimeout(ctx, requestBudget)
+ 		view, err := c.Overview(req, options)
+ 		cancel()
+ 		if ctx.Err() != nil {
+@@ -265,6 +288,9 @@ func statusFrame(v statusView, cols, rows int) string {
+ 		lines = append(lines, "Loading filter; rows below are from the last successful snapshot.")
+ 	} else if v.notice != "" {
+ 		lines = append(lines, v.notice)
++	} else if v.snapshot != nil && len(v.snapshot.view.DiscoveryIssues) > 0 {
++		issue := v.snapshot.view.DiscoveryIssues[0]
++		lines = append(lines, string(issue.Provider)+": "+issue.Message)
+ 	} else {
+ 		lines = append(lines, "Attention is recorded watch matches; running does not imply an agent is working.")
+ 	}
+@@ -356,9 +382,68 @@ func watchStatus(c client.API, options terminal.OverviewOptions, in, out *os.Fil
+ 	resize := make(chan os.Signal, 1)
+ 	signal.Notify(resize, syscall.SIGWINCH)
+ 	defer signal.Stop(resize)
++	showTerminal := func(row terminal.SessionSummary, initial []byte) error {
++		_ = term.Restore(int(in.Fd()), raw)
++		raw = nil
++		_, _ = io.WriteString(out, "\x1b[0m\x1b[?25h\x1b[?1049l")
++		code, unread := attach(ctx, c, terminal.Info{ID: row.ID, Name: row.Name}, false, initial)
++		v.notice = ""
++		if code != 0 {
++			v.notice = fmt.Sprintf("Attachment to %s ended with code %d. Its last window is in local scrollback.", row.ID, code)
++		}
++		if ctx.Err() != nil {
++			return nil
++		}
++		raw, err = term.MakeRaw(int(in.Fd()))
++		if err != nil {
++			return err
++		}
++		nextInput, err := client.NewInput(ctx, in, unread)
++		if err != nil {
++			return err
++		}
++		input = nextInput
++		_, _ = io.WriteString(out, statusEnter)
++		v.selected = row.ID
++		queueStatusQuery(queries, v.query)
++		return nil
++	}
++	type importResult struct {
++		result terminal.ImportResult
++		err    error
++	}
++	imports := make(chan importResult)
++	var importCancel context.CancelFunc
++	defer func() {
++		if importCancel != nil {
++			importCancel()
++		}
++	}()
++
+ 	draw()
+ 	for {
+ 		select {
++		case imported := <-imports:
++			importCancel()
++			importCancel = nil
++			if imported.err != nil {
++				v.notice = imported.err.Error()
++				draw()
++				continue
++			}
++			input.Close()
++			pending = nil
++			if err = client.FlushInput(in); err != nil {
++				return err
++			}
++			row := terminal.SessionSummary{ID: imported.result.Terminal.ID, Name: imported.result.Terminal.Name, Source: imported.result.Terminal.Source}
++			if err = showTerminal(row, nil); err != nil {
++				return err
++			}
++			if row.Source.Provider != "" {
++				v.selected = terminal.ID("native:" + imported.result.Session.Ref.Key())
++			}
++			draw()
+ 		case <-ctx.Done():
+ 			return nil
+ 		case result := <-updates:
+@@ -376,6 +461,14 @@ func watchStatus(c client.API, options terminal.OverviewOptions, in, out *os.Fil
+ 			if !ok {
+ 				return nil
+ 			}
++			if importCancel != nil {
++				for _, b := range bytes {
++					if b == 'q' || b == 3 {
++						return nil
++					}
++				}
++				continue
++			}
+ 			pending = append(pending, bytes...)
+ 			for len(pending) > 0 {
+ 				r, n := utf8.DecodeRune(pending)
+@@ -433,32 +526,41 @@ func watchStatus(c client.API, options terminal.OverviewOptions, in, out *os.Fil
+ 						continue
+ 					}
+ 					row := v.sessions()[v.selectedIndex()]
++					if row.External != nil {
++						if row.External.Action != native.Attach {
++							v.notice = row.External.Reason
++							if v.notice == "" {
++								v.notice = "Use ptyd import --resume " + row.External.Ref.Key() + " to restart this stopped conversation."
++							}
++							continue
++						}
++						operation, cancelOperation := context.WithCancel(ctx)
++						importCancel = cancelOperation
++						request := terminal.ImportRequest{Ref: row.External.Ref}
++						v.notice = "Opening native session… q or Ctrl-C cancels."
++						draw()
++						go func() {
++							result, err := c.ImportAgent(operation, request)
++							select {
++							case imports <- importResult{result, err}:
++							case <-operation.Done():
++							}
++						}()
++						for _, b := range pending {
++							if b == 'q' || b == 3 {
++								return nil
++							}
++						}
++						pending = nil
++						continue
++					}
++
+ 					initial := append([]byte(nil), pending...)
+ 					initial = append(initial, input.Remainder()...)
+ 					pending = nil
+-					_ = term.Restore(int(in.Fd()), raw)
+-					raw = nil
+-					_, _ = io.WriteString(out, "\x1b[0m\x1b[?25h\x1b[?1049l")
+-					code, unread := attach(ctx, c, terminal.Info{ID: row.ID, Name: row.Name}, false, initial)
+-					v.notice = ""
+-					if code != 0 {
+-						v.notice = fmt.Sprintf("Attachment to %s ended with code %d. Its last window is in local scrollback.", row.ID, code)
+-					}
+-					if ctx.Err() != nil {
+-						return nil
+-					}
+-					raw, err = term.MakeRaw(int(in.Fd()))
+-					if err != nil {
++					if err = showTerminal(row, initial); err != nil {
+ 						return err
+ 					}
+-					nextInput, err := client.NewInput(ctx, in, unread)
+-					if err != nil {
+-						return err
+-					}
+-					input = nextInput
+-					_, _ = io.WriteString(out, statusEnter)
+-					v.selected = row.ID
+-					queueStatusQuery(queries, v.query)
+ 				}
+ 			}
+ 			draw()
+diff --git a/cmd/ptyd/status_test.go b/cmd/ptyd/status_test.go
+index db94cc9..f93fa22 100644
+--- a/cmd/ptyd/status_test.go
++++ b/cmd/ptyd/status_test.go
+@@ -5,14 +5,22 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"errors"
++	"io"
+ 	"net/http"
+ 	"net/http/httptest"
++	"os"
++	"os/exec"
++	"path/filepath"
+ 	"strings"
++	"sync/atomic"
++	"syscall"
+ 	"testing"
+ 	"time"
+ 
+ 	"github.com/2018kguo/phosphor"
++	"github.com/2018kguo/ptyd/internal/api"
+ 	"github.com/2018kguo/ptyd/internal/client"
++	"github.com/2018kguo/ptyd/internal/native"
+ 	"github.com/2018kguo/ptyd/internal/terminal"
+ )
+ 
+@@ -225,3 +233,240 @@ func TestStatusAttachPreservesCancellation(t *testing.T) {
+ 	default:
+ 	}
+ }
++
++const watchNativeID = "11111111-1111-4111-8111-111111111111"
++
++func TestStatusNativeImportCanQuitDuringBlockedRequest(t *testing.T) {
++	stopServer := make(chan struct{})
++	started := make(chan struct{}, 1)
++	session := native.Session{Ref: native.Ref{Provider: native.Claude, ID: watchNativeID}, Name: "native-fixture", Status: "busy", Action: native.Attach}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/overview" {
++			json.NewEncoder(w).Encode(terminal.Overview{Sessions: []terminal.SessionSummary{{ID: "native:claude:" + watchNativeID, Name: session.Name, External: &session, State: terminal.OverviewExternal}}})
++			return
++		}
++		if r.URL.Path == "/agents/import" {
++			_, _ = io.Copy(io.Discard, r.Body)
++			started <- struct{}{}
++			select {
++			case <-r.Context().Done():
++			case <-stopServer:
++			}
++			return
++		}
++		http.NotFound(w, r)
++	}))
++	defer server.Close()
++	defer close(stopServer)
++	d := &daemon{t: t, addr: strings.TrimPrefix(server.URL, "http://")}
++	w := d.open(110, 18, "status", "--watch", "--discover")
++	w.waitText("native-fixture")
++	w.keys("\r")
++	select {
++	case <-started:
++	case <-time.After(5 * time.Second):
++		t.Fatal("import never started")
++	}
++	w.keys("q")
++	select {
++	case <-w.exited:
++	case <-time.After(1500 * time.Millisecond):
++		t.Fatal("native import blocked quit")
++	}
++	if code := w.waitExit(); code != 0 {
++		t.Fatalf("exit %d", code)
++	}
++}
++
++type watchNativeFixture struct {
++	session native.Session
++	started chan struct{}
++	release chan struct{}
++	calls   atomic.Int32
++}
++
++func (f *watchNativeFixture) List(context.Context) native.Listing {
++	return native.Listing{Sessions: []native.Session{f.session}}
++}
++func (f *watchNativeFixture) Lookup(ctx context.Context, _ native.Ref) (native.Session, error) {
++	if f.calls.Add(1) == 1 {
++		close(f.started)
++		select {
++		case <-ctx.Done():
++			return native.Session{}, ctx.Err()
++		case <-f.release:
++		}
++	}
++	return f.session, nil
++}
++func TestStatusNativeImportDiscardsPreHandoffKeysAndReleasesView(t *testing.T) {
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nstty -echo\nprintf 'VIEW_READY\\n'\nexec cat\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
++	worker := exec.Command("sleep", "60")
++	if err := worker.Start(); err != nil {
++		t.Fatal(err)
++	}
++	defer func() { worker.Process.Kill(); worker.Wait() }()
++	fixture := &watchNativeFixture{session: native.Session{Ref: native.Ref{Provider: native.Claude, ID: watchNativeID}, Name: "native-fixture", CWD: dir, Status: "busy", Action: native.Attach, WorkerPID: worker.Process.Pid, Handle: "job-fixture"}, started: make(chan struct{}), release: make(chan struct{})}
++	mgr := terminal.NewManager()
++	defer mgr.CloseAll()
++	server := httptest.NewServer(api.New(mgr, api.Config{Native: fixture}).Handler())
++	defer server.Close()
++	defer func() {
++		select {
++		case <-fixture.release:
++		default:
++			close(fixture.release)
++		}
++	}()
++	d := &daemon{t: t, addr: strings.TrimPrefix(server.URL, "http://")}
++	w := d.open(110, 20, "status", "--watch", "--discover")
++	w.waitText("native-fixture")
++	// Typeahead delivered with Enter must not become native agent input.
++	w.keys("\rSTALE_INPUT\r")
++	select {
++	case <-fixture.started:
++	case <-time.After(5 * time.Second):
++		t.Fatal("import never started")
++	}
++	w.keys("MORE_STALE_INPUT\r")
++	close(fixture.release)
++	w.waitText("VIEW_READY")
++	infos := mgr.List()
++	if len(infos) != 1 {
++		t.Fatalf("views: %+v", infos)
++	}
++	snapshot, err := mgr.Output(infos[0].ID, -1, 100)
++	if err != nil {
++		t.Fatal(err)
++	}
++	text := snapshot.Pending
++	for _, line := range snapshot.Lines {
++		text += line.Text
++	}
++	if strings.Contains(text, "STALE_INPUT") {
++		t.Fatalf("picker keys reached the native view: %q", text)
++	}
++	w.keys("fresh-input\r")
++	w.waitText("fresh-input")
++	w.keys("\x1c\x1cq")
++	if code := w.waitExit(); code != 0 {
++		t.Fatalf("watch exit %d", code)
++	}
++	if len(mgr.List()) != 0 {
++		t.Fatal("detached native frontend was retained")
++	}
++	if err = worker.Process.Signal(syscall.Signal(0)); err != nil {
++		t.Fatalf("native worker stopped: %v", err)
++	}
++}
++
++func nativeCLIFixture(t *testing.T, script string) (*daemon, *terminal.Manager, native.Ref) {
++	t.Helper()
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
++	fixture := &watchNativeFixture{session: native.Session{Ref: native.Ref{Provider: native.Claude, ID: watchNativeID}, Name: "native-fixture", CWD: dir, Status: "busy", Action: native.Attach, WorkerPID: os.Getpid(), Handle: "job-fixture"}, started: make(chan struct{}), release: make(chan struct{})}
++	close(fixture.release)
++	mgr := terminal.NewManager()
++	t.Cleanup(mgr.CloseAll)
++	server := httptest.NewServer(api.New(mgr, api.Config{Native: fixture}).Handler())
++	t.Cleanup(server.Close)
++	return &daemon{t: t, addr: strings.TrimPrefix(server.URL, "http://")}, mgr, fixture.session.Ref
++}
++
++func TestNativeCLIDetachKeepsOtherViewers(t *testing.T) {
++	for _, mode := range []string{"import", "picker"} {
++		t.Run(mode, func(t *testing.T) {
++			d, mgr, ref := nativeCLIFixture(t, "#!/bin/sh\nstty -echo\nprintf 'VIEW_READY\\n'\nexec cat\n")
++			var first *window
++			if mode == "picker" {
++				first = d.open(110, 20, "status", "--watch", "--discover")
++				first.waitText("native-fixture")
++				first.keys("\r")
++			} else {
++				first = d.open(110, 20, "import", ref.Key())
++			}
++			first.waitText("VIEW_READY")
++			rows := mgr.List()
++			if len(rows) != 1 {
++				t.Fatalf("views: %+v", rows)
++			}
++			id := rows[0].ID
++			second := d.open(110, 20, "attach", string(id))
++			second.waitText("VIEW_READY")
++			first.keys("\x1c\x1c")
++			if mode == "picker" {
++				first.waitText("native-fixture")
++				first.keys("q")
++			}
++			if code := first.waitExit(); code != 0 {
++				t.Fatalf("first viewer exit: %d", code)
++			}
++			info, err := mgr.Get(id)
++			if err != nil || info.Status != terminal.StatusRunning {
++				t.Fatalf("first viewer deleted shared frontend: %+v %v", info, err)
++			}
++			second.keys("second-client-live\r")
++			second.waitText("second-client-live")
++			second.keys("\x1c\x1c")
++			if code := second.waitExit(); code != 0 {
++				t.Fatalf("second viewer exit: %d", code)
++			}
++			for deadline := time.Now().Add(3 * time.Second); len(mgr.List()) != 0; time.Sleep(10 * time.Millisecond) {
++				if time.Now().After(deadline) {
++					t.Fatal("last viewer retained running frontend")
++				}
++			}
++		})
++	}
++}
++
++func TestNativeCLIReportsFrontendExitCode(t *testing.T) {
++	d, _, ref := nativeCLIFixture(t, "#!/bin/sh\nprintf 'VIEW_READY\\n'\nread line\nexit 7\n")
++	w := d.open(110, 20, "import", ref.Key())
++	w.waitText("VIEW_READY")
++	w.keys("finish\r")
++	if code := w.waitExit(); code != 7 {
++		t.Fatalf("frontend exit code %d, window: %q", code, w.lines())
++	}
++	w.waitText("[terminal exited (code 7)]")
++}
++
++type delayedNativeFixture struct{ session native.Session }
++
++func (f delayedNativeFixture) List(ctx context.Context) native.Listing {
++	select {
++	case <-time.After(2300 * time.Millisecond):
++		return native.Listing{Sessions: []native.Session{f.session}, Issues: []native.Issue{{Provider: native.Claude, Message: "Claude query timed out"}}}
++	case <-ctx.Done():
++		return native.Listing{Issues: []native.Issue{{Provider: native.Claude, Message: ctx.Err().Error()}}}
++	}
++}
++func (f delayedNativeFixture) Lookup(context.Context, native.Ref) (native.Session, error) {
++	return native.Session{}, errors.New("not used")
++}
++func TestStatusDiscoveryAllowsBoundedSlowProvider(t *testing.T) {
++	mgr := terminal.NewManager()
++	t.Cleanup(mgr.CloseAll)
++	if _, err := mgr.Create(terminal.CreateConfig{Name: "managed-visible", Command: "cat", CWD: t.TempDir()}); err != nil {
++		t.Fatal(err)
++	}
++	fixture := delayedNativeFixture{session: native.Session{Ref: native.Ref{Provider: native.Codex, ID: watchNativeID}, Name: "healthy-codex", CWD: "/tmp", Status: "active", Action: native.Attach}}
++	server := httptest.NewServer(api.New(mgr, api.Config{Native: fixture}).Handler())
++	t.Cleanup(server.Close)
++	d := &daemon{t: t, addr: strings.TrimPrefix(server.URL, "http://")}
++	w := d.open(110, 20, "status", "--watch", "--discover")
++	w.waitText("managed-visible")
++	w.waitText("healthy-codex")
++	w.waitText("Claude query timed out")
++	w.keys("q")
++	if code := w.waitExit(); code != 0 {
++		t.Fatalf("picker exit %d", code)
++	}
++}
+diff --git a/docs/development.md b/docs/development.md
+index d72a139..2b3f769 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -15,6 +15,7 @@ Docker, use `--init` so orphaned test children are reaped.
+ - `cmd/ptyd`: CLI, attach behavior and end-to-end tests.
+ - `internal/terminal`: session lifecycle, retained output, watches and persistence.
+ - `internal/api`, `internal/client`: HTTP server and client.
++- `internal/native`: read-only Codex/Claude discovery and exact import references.
+ - [bench/](../bench/README.md): maintained measurement tools, scope and archived evidence.
+ 
+ Keep run output under ignored `.bench/`. Fixtures and executable measurement
+@@ -33,3 +34,27 @@ It checks that a session changed inside the app resumes by its exact current
+ id after the daemon restarts. Do not infer live-provider behavior from the
+ fake-agent tests alone. Emulator changes belong in
+ [phosphor](https://github.com/2018kguo/phosphor).
++
++## Verify native imports
++
++Ordinary tests use fake native CLIs, a Unix WebSocket fixture and real local
++PTYs. They cover exact identity, partial discovery, concurrent imports,
++process-generation changes, foreground handoff refusal, persistence, native
++worker survival after detach and picker cancellation/typeahead.
++
++The optional installed-CLI witnesses use isolated profiles and local fake
++model streams. They make no real model-provider calls and do not attach to
++existing user sessions:
++
++```sh
++PTYD_CODEX_TEST_BIN="$(command -v codex)" \
++PTYD_CLAUDE_TEST_BIN="$(command -v claude)" \
++  go test ./internal/terminal -run '^TestInstalled(Codex|Claude)ImportKeepsActiveWorker$' -v -count=1
++```
++
++Each witness holds a response active while a real native CLI renders new
++output in a ptyd view. Detach must leave the same process generation and
++conversation alive with one model request. The Codex witness also keeps an
++original native CLI open, verifies import leaves it untouched, and closes
++that owned test window before releasing the ptyd view. Native UI redraw is
++not an exact capture of another terminal's past screen or partial output.
+diff --git a/docs/operating.md b/docs/operating.md
+index 6ccd873..6fc3889 100644
+--- a/docs/operating.md
++++ b/docs/operating.md
+@@ -48,6 +48,20 @@ message: after `/new`, an earlier existing conversation may be resumed.
+ A resumed agent can redraw and clear the saved window; it is not a permanent
+ transcript viewer.
+ 
++## Imported native views
++
++An imported Codex or Claude view is a client of the agent's existing local
++daemon. That daemon owns the worker and conversation. Detaching, deleting the
++view or shutting down ptyd closes the frontend, while native work continues.
++Unclaimed views expire after one minute. They use no automatic restore
++policy; discover and import again after restarting ptyd.
++
++Use `ptyd status --watch --discover` for the combined picker. A source
++reference records which conversation was selected at launch, and does not
++track later navigation inside the native CLI. Generic restart/restore cannot
++reuse that reference without fresh validation. [The import reference](reference.md#import-native-agent-sessions)
++explains handoff, profile scope and incomplete discovery.
++
+ ## Persistence and upgrades
+ 
+ Each terminal directory contains `meta.json`, `screen.ckpt`, bounded
+diff --git a/docs/reference.md b/docs/reference.md
+index e4e9e7a..0c06e52 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -10,7 +10,9 @@ control. Both use the same daemon and session ids.
+ | `ptyd` | Start the daemon; `ptyd -h` lists flags. |
+ | `ptyd new [-n name] [-d] [--restore policy] [command [args...]]` | Start and attach; `-d` prints the id without attaching. |
+ | `ptyd ls` | List sessions. |
+-| `ptyd status [--json \| --watch] [--limit N] [--filter text] [--tag tags]` | Attention-first overview; live selection or compact agent JSON. |
++| `ptyd status [--json \| --watch] [--discover] [--limit N] [--filter text] [--tag tags]` | Attention-first overview; live selection or compact agent JSON. |
++| `ptyd agents [--json]` | Discover native Codex and Claude sessions and their import actions. |
++| `ptyd import [-d] [-n name] [--resume] provider:UUID` | Open a view for an exact native conversation; `-d` prints its terminal id. |
+ | `ptyd attach [--readonly] terminal` | Attach to a running session or view a stopped one's screen. |
+ | `ptyd restore [--policy policy] terminal` | Start a stopped terminal again under the same id, then attach. |
+ | `ptyd kill terminal...` | Kill and forget sessions. |
+@@ -31,6 +33,8 @@ are JSON. Errors are `{"error":"..."}`: 400 invalid input, 401 bad token,
+ |---|---|---|
+ | `GET` | `/healthz`, `/metrics` | Liveness; JSON counters and uptime. No auth. |
+ | `GET` | `/terminals` | Optional `?tag=a,b`; oldest first, matching any tag. |
++| `GET` | `/agents` | Native sessions, action requirements, discovery issues and truncation. |
++| `POST` | `/agents/import` | Freshly validate a native reference and create a terminal frontend. |
+ | `GET` | `/overview` | Compact session summaries; `?limit=50&q=text&tag=a,b`. Counts include all matches. |
+ | `POST` | `/terminals` | Create; returns 201 and metadata. |
+ | `GET` | `T` | Metadata, status, pid, output position, attention and restore information. |
+@@ -174,3 +178,82 @@ For custom clients, request `Connection: Upgrade` and `Upgrade: ptyd-attach`
+ on `T/attach`, with authentication. After 101, the server sends raw output.
+ Client frames are a type byte, a big-endian uint32 payload length, then
+ payload: `i` for input; `r` for two big-endian uint16 values (cols, rows).
++
++## Import native agent sessions
++
++`ptyd agents --json` and `GET /agents` query the installed native CLIs in the
++daemon's environment. Codex discovery reads its running local daemon over its
++Unix socket. Claude discovery uses `claude agents --json --all`. Neither probe
++starts a turn or selects a conversation by title, timestamp or “last.”
++
++Each session has a `ref` (`provider` and full UUID), `name`, `cwd`, native
++`status`, optional `waiting_for`, `worker_pid` and an `action`:
++
++| Action | What to do |
++|---|---|
++| `attach` | Import the running conversation. |
++| `background` | Run `/bg` in the original Claude tab, wait for its handoff, then refresh. |
++| `resume` | Explicitly allow continuing a stopped Claude background conversation. |
++| `unavailable` | Follow `reason`; ptyd cannot establish a safe import yet. |
++
++`GET /overview?discover=true` combines these observations with managed
++terminals. External rows have `state: "external"` and an `external` object;
++their `id` is a picker key, not a `/terminals` id. `counts.external` counts
++these rows. Running, stopped and exited counts still describe managed
++terminals. Counts cover all matching rows before the view limit. Native
++`status` comes from the runtime rather than terminal-output heuristics.
++Ordinary `GET /overview` does not run native probes.
++
++Discovery is cached for five seconds. `issues` (or `discovery_issues` in the
++overview) and `truncated`/`discovery_truncated` describe incomplete reads;
++partial discovery is not proof that a session is absent. Each native response
++is capped at 4 MiB, and at most 500 native records per provider are returned.
++Import bypasses the cache and refuses incomplete requested-provider listings.
++Native background/foreground ambiguity is checked before applying the row cap.
++
++To import through HTTP, send the exact reference from discovery:
++
++```json
++{
++  "ref": {"provider": "codex", "id": "11111111-1111-4111-8111-111111111111"},
++  "name": "review",
++  "cols": 120,
++  "rows": 40
++}
++```
++
++Replace the example UUID with the discovered id. A stopped Claude conversation
++also needs `"resume": true`; the CLI equivalent is `ptyd import --resume`
++followed by its `claude:UUID` reference. The response contains `terminal`,
++`session` and `reused`. An existing normal ptyd terminal whose current agent
++hook reports that exact conversation may be reused. Otherwise the server
++creates a temporary frontend and checks the native reference, directory and
++hosting process generation again. Codex connects to the specific daemon
++socket observed during validation, not a newly selected server.
++
++Use the returned terminal id for the normal attach/screen/input routes. Claim
++the view with an attachment within one minute; an unclaimed view expires.
++Last detach closes a running temporary frontend. After a frontend exits, its
++exit status remains readable for one minute before cleanup. Closing, killing or expiring that
++frontend does not stop the native worker. Native conversations appear in the
++combined picker; temporary frontends do not add duplicate session rows.
++
++An imported window can navigate to another conversation. Its `source` is
++launch provenance, not proof of its current input target. Another import of
++the original reference conflicts while that window is open; attach it by its
++explicit terminal id or close it first. The picker never silently reuses a
++window based on launch provenance. Native view input typed before import
++finishes is discarded, including queued cancellation keys.
++
++Imported views are not automatically restored after a ptyd restart. Refresh
++native discovery and import again; generic restart/restore refuses to bypass
++fresh native validation. This leaves native worker lifecycle with its owner.
++
++Only the configured local profiles are discovered. Codex must expose its
++loaded sessions through the shared daemon; standalone `--no-daemon`, other
++profiles and remote hosts are outside this import path. Claude foreground
++handoff follows [Claude's native rules](https://code.claude.com/docs/en/agent-view#what-carries-over-when-you-background),
++including work that must finish or restart. Ptyd does not press those controls
++for you, close an original tab, inject a prompt or adopt an arbitrary macOS PTY.
++The native CLI may show its own authentication, trust or update prompts, and
++its redraw/history behavior determines what the new view displays.
+diff --git a/go.mod b/go.mod
+index 3a507f7..d4d44e7 100644
+--- a/go.mod
++++ b/go.mod
+@@ -4,6 +4,7 @@ go 1.26.2
+ 
+ require (
+ 	github.com/2018kguo/phosphor v0.4.3
++	github.com/coder/websocket v1.8.15
+ 	github.com/creack/pty v1.1.24
+ 	golang.org/x/sys v0.49.0
+ 	golang.org/x/term v0.47.0
+diff --git a/go.sum b/go.sum
+index b733c2e..17b0979 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,5 +1,7 @@
+ github.com/2018kguo/phosphor v0.4.3 h1:b3/yZjWaPQzu+c1ScDOAJp0dPwD5dHZcJVcvGIdJSM4=
+ github.com/2018kguo/phosphor v0.4.3/go.mod h1:XZNmcnmuVOhNo34gQmli2ccEuikqMiplQARRlM8m+8c=
++github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
++github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
+ github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
+ github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
+ golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
+diff --git a/internal/api/agents.go b/internal/api/agents.go
+new file mode 100644
+index 0000000..104e5c5
+--- /dev/null
++++ b/internal/api/agents.go
+@@ -0,0 +1,32 @@
++package api
++
++import (
++	"errors"
++	"net/http"
++
++	"github.com/2018kguo/ptyd/internal/terminal"
++)
++
++func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
++	writeJSON(w, http.StatusOK, s.native.List(r.Context()))
++}
++func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
++	var request terminal.ImportRequest
++	if !decodeJSON(w, r, &request) {
++		return
++	}
++	result, err := s.mgr.ImportAgent(r.Context(), s.native, request)
++	if err != nil {
++		status := http.StatusBadRequest
++		if errors.Is(err, terminal.ErrImportDeclined) {
++			status = http.StatusConflict
++		}
++		writeError(w, status, "%v", err)
++		return
++	}
++	status := http.StatusCreated
++	if result.Reused {
++		status = http.StatusOK
++	}
++	writeJSON(w, status, result)
++}
+diff --git a/internal/api/agents_test.go b/internal/api/agents_test.go
+new file mode 100644
+index 0000000..7c35221
+--- /dev/null
++++ b/internal/api/agents_test.go
+@@ -0,0 +1,112 @@
++package api
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/2018kguo/ptyd/internal/native"
++	"github.com/2018kguo/ptyd/internal/terminal"
++)
++
++const apiNativeID = "11111111-1111-4111-8111-111111111111"
++
++type nativeFixture struct {
++	calls atomic.Int32
++	s     native.Session
++}
++
++func (f *nativeFixture) List(context.Context) native.Listing {
++	f.calls.Add(1)
++	return native.Listing{Sessions: []native.Session{f.s}, Issues: []native.Issue{{Provider: native.Codex, Message: "Codex is unavailable"}}}
++}
++func (f *nativeFixture) Lookup(context.Context, native.Ref) (native.Session, error) {
++	f.calls.Add(1)
++	return f.s, nil
++}
++func TestNativeRoutesRequireAuthenticationAndDiscoveryIsExplicit(t *testing.T) {
++	n := &nativeFixture{s: native.Session{Ref: native.Ref{Provider: native.Claude, ID: apiNativeID}, CWD: "/tmp", Name: "outside", Status: "busy", Action: native.Background, Reason: "Run /bg"}}
++	mgr := terminal.NewManager()
++	defer mgr.CloseAll()
++	h := New(mgr, Config{Token: "secret", Native: n}).Handler()
++	for _, tc := range []struct {
++		method, path, token string
++		status              int
++	}{
++		{"GET", "/agents", "", 401}, {"POST", "/agents/import", "", 401}, {"GET", "/overview?discover=true", "", 401},
++		{"GET", "/overview", "secret", 200}, {"GET", "/overview?discover=false", "secret", 200}, {"GET", "/overview?discover=wrong", "secret", 400},
++	} {
++		req := httptest.NewRequest(tc.method, tc.path, nil)
++		req.Header.Set("X-Ptyd-Token", tc.token)
++		w := httptest.NewRecorder()
++		h.ServeHTTP(w, req)
++		if w.Code != tc.status {
++			t.Fatalf("%s: %d %s", tc.path, w.Code, w.Body)
++		}
++	}
++	if n.calls.Load() != 0 {
++		t.Fatal("ordinary overview or unauthorized request ran native probes")
++	}
++	req := httptest.NewRequest("GET", "/overview?discover=true", nil)
++	req.Header.Set("X-Ptyd-Token", "secret")
++	w := httptest.NewRecorder()
++	h.ServeHTTP(w, req)
++	var view terminal.Overview
++	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &view) != nil || view.Counts.External != 1 || view.Counts.Running != 0 || view.Counts.Total != 1 || view.Sessions[0].State != terminal.OverviewExternal || len(view.DiscoveryIssues) != 1 {
++		t.Fatalf("bad external view: %d %s", w.Code, w.Body)
++	}
++	if len(mgr.List()) != 0 {
++		t.Fatal("discovery created registry entries")
++	}
++	req = httptest.NewRequest("POST", "/agents/import", strings.NewReader(`{"ref":{"provider":"claude","id":"`+apiNativeID+`"}}`))
++	req.Header.Set("X-Ptyd-Token", "secret")
++	w = httptest.NewRecorder()
++	h.ServeHTTP(w, req)
++	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "/bg") || len(mgr.List()) != 0 {
++		t.Fatalf("foreground import: %d %s", w.Code, w.Body)
++	}
++}
++func TestNativeImportHTTPUsesExactAuthorityAndReturnsView(t *testing.T) {
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexec cat\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
++	n := &nativeFixture{s: native.Session{Ref: native.Ref{Provider: native.Claude, ID: apiNativeID}, CWD: dir, Name: "fixture", Status: "busy", Action: native.Attach, WorkerPID: os.Getpid(), Handle: "job-fixture"}}
++	m := terminal.NewManager()
++	defer m.CloseAll()
++	h := New(m, Config{Native: n}).Handler()
++	body := []byte(`{"ref":{"provider":"claude","id":"` + apiNativeID + `"},"name":"imported","command":"wrong-binary","args":["--last"]}`)
++	w := httptest.NewRecorder()
++	h.ServeHTTP(w, httptest.NewRequest("POST", "/agents/import", bytes.NewReader(body)))
++	var result terminal.ImportResult
++	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &result) != nil {
++		t.Fatalf("%d %s", w.Code, w.Body)
++	}
++	if result.Terminal.Source != n.s.Ref || result.Terminal.Command != "claude" || strings.Join(result.Terminal.Args, " ") != "attach job-fixture" {
++		t.Fatalf("caller controlled native launch: %+v", result)
++	}
++	if strings.Contains(w.Body.String(), "Endpoint") {
++		t.Fatal("internal endpoint leaked")
++	}
++	again := httptest.NewRecorder()
++	h.ServeHTTP(again, httptest.NewRequest("POST", "/agents/import", bytes.NewReader(body)))
++	if again.Code != http.StatusConflict || len(m.List()) != 1 {
++		t.Fatalf("duplicate view: %d %s", again.Code, again.Body)
++	}
++	a, err := m.Attach(result.Terminal.ID, 80, 24, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	a.Close()
++	if len(m.List()) != 0 {
++		t.Fatal("temporary frontend not released")
++	}
++}
+diff --git a/internal/api/overview.go b/internal/api/overview.go
+index 0bb6308..a0e8846 100644
+--- a/internal/api/overview.go
++++ b/internal/api/overview.go
+@@ -19,6 +19,17 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
+ 		limit = n
+ 	}
+ 	tags := splitNonEmpty(q.Get("tag"), ",")
+-	view := s.mgr.Overview(terminal.OverviewOptions{Limit: limit, Query: q.Get("q"), Tags: tags})
++	options := terminal.OverviewOptions{Limit: limit, Query: q.Get("q"), Tags: tags}
++	view := s.mgr.Overview(options)
++	if raw := q.Get("discover"); raw != "" {
++		enabled, err := strconv.ParseBool(raw)
++		if err != nil {
++			writeError(w, http.StatusBadRequest, "discover must be true or false")
++			return
++		}
++		if enabled {
++			view = terminal.BuildDiscoveredOverview(s.mgr.List(), s.native.List(r.Context()), options)
++		}
++	}
+ 	writeJSON(w, http.StatusOK, view)
+ }
+diff --git a/internal/api/server.go b/internal/api/server.go
+index 910a7aa..1006cff 100644
+--- a/internal/api/server.go
++++ b/internal/api/server.go
+@@ -17,6 +17,7 @@ import (
+ 	"time"
+ 	"unicode/utf8"
+ 
++	"github.com/2018kguo/ptyd/internal/native"
+ 	"github.com/2018kguo/ptyd/internal/terminal"
+ )
+ 
+@@ -25,12 +26,20 @@ const maxBodyBytes = 1 << 20
+ 
+ // Config holds server-level options.
+ type Config struct {
+-	Addr  string // host:port to listen on
+-	Token string // if non-empty, required as X-Ptyd-Token on every request
++	Native NativeService // optional; defaults to the local native CLIs
++	Addr   string        // host:port to listen on
++	Token  string        // if non-empty, required as X-Ptyd-Token on every request
++}
++
++// NativeService provides discovery and fresh import authority.
++type NativeService interface {
++	native.Discovery
++	terminal.NativeLookup
+ }
+ 
+ // Server is the HTTP API for ptyd.
+ type Server struct {
++	native NativeService
+ 	mgr    *terminal.Manager
+ 	token  string
+ 	httpd  *http.Server
+@@ -40,7 +49,10 @@ type Server struct {
+ // New constructs (but does not start) a Server.
+ func New(mgr *terminal.Manager, cfg Config) *Server {
+ 	base, cancel := context.WithCancel(context.Background())
+-	s := &Server{mgr: mgr, token: cfg.Token, cancel: cancel}
++	s := &Server{mgr: mgr, token: cfg.Token, cancel: cancel, native: cfg.Native}
++	if s.native == nil {
++		s.native = new(native.Discoverer)
++	}
+ 	mux := http.NewServeMux()
+ 	s.registerRoutes(mux)
+ 	s.httpd = &http.Server{
+@@ -85,6 +97,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
+ 	mux.HandleFunc("GET /healthz", s.handleHealth)
+ 	mux.HandleFunc("GET /metrics", s.handleMetrics)
+ 	mux.HandleFunc("GET /overview", s.handleOverview)
++	mux.HandleFunc("GET /agents", s.handleAgents)
++	mux.HandleFunc("POST /agents/import", s.handleImport)
+ 	mux.HandleFunc("GET /search", s.handleSearch)
+ 	mux.HandleFunc("GET /terminals", s.handleList)
+ 	mux.HandleFunc("POST /terminals", s.handleCreate)
+diff --git a/internal/client/agents.go b/internal/client/agents.go
+new file mode 100644
+index 0000000..229ed32
+--- /dev/null
++++ b/internal/client/agents.go
+@@ -0,0 +1,19 @@
++package client
++
++import (
++	"context"
++
++	"github.com/2018kguo/ptyd/internal/native"
++	"github.com/2018kguo/ptyd/internal/terminal"
++)
++
++func (c API) Agents(ctx context.Context) (native.Listing, error) {
++	var out native.Listing
++	err := c.DoContext(ctx, "GET", "/agents", nil, &out)
++	return out, err
++}
++func (c API) ImportAgent(ctx context.Context, request terminal.ImportRequest) (terminal.ImportResult, error) {
++	var out terminal.ImportResult
++	err := c.DoContext(ctx, "POST", "/agents/import", request, &out)
++	return out, err
++}
+diff --git a/internal/client/input_darwin.go b/internal/client/input_darwin.go
+new file mode 100644
+index 0000000..852e66f
+--- /dev/null
++++ b/internal/client/input_darwin.go
+@@ -0,0 +1,13 @@
++package client
++
++import (
++	"os"
++
++	"golang.org/x/sys/unix"
++)
++
++// FlushInput drops keys typed before a newly imported native view is ready.
++// The input reader must be stopped first so it cannot race this handoff.
++func FlushInput(in *os.File) error {
++	return unix.IoctlSetPointerInt(int(in.Fd()), unix.TIOCFLUSH, 1 /* FREAD: flush the input queue only */)
++}
+diff --git a/internal/client/input_linux.go b/internal/client/input_linux.go
+new file mode 100644
+index 0000000..19a0c0e
+--- /dev/null
++++ b/internal/client/input_linux.go
+@@ -0,0 +1,11 @@
++package client
++
++import (
++	"os"
++
++	"golang.org/x/sys/unix"
++)
++
++// FlushInput drops keys typed before a newly imported native view is ready.
++// The input reader must be stopped first so it cannot race this handoff.
++func FlushInput(in *os.File) error { return unix.IoctlSetInt(int(in.Fd()), unix.TCFLSH, unix.TCIFLUSH) }
+diff --git a/internal/client/overview.go b/internal/client/overview.go
+index 5d0e80d..3782024 100644
+--- a/internal/client/overview.go
++++ b/internal/client/overview.go
+@@ -13,6 +13,9 @@ import (
+ 
+ func (c API) Overview(ctx context.Context, options terminal.OverviewOptions) (terminal.Overview, error) {
+ 	q := url.Values{}
++	if options.Discover {
++		q.Set("discover", "true")
++	}
+ 	if options.Limit > 0 {
+ 		q.Set("limit", strconv.Itoa(options.Limit))
+ 	}
+diff --git a/internal/native/codex.go b/internal/native/codex.go
+new file mode 100644
+index 0000000..0660f8f
+--- /dev/null
++++ b/internal/native/codex.go
+@@ -0,0 +1,200 @@
++package native
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"net"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++
++	"github.com/coder/websocket"
++)
++
++type codexRPC struct {
++	conn    *websocket.Conn
++	seq     int
++	peerPID int
++}
++
++func dialCodex(ctx context.Context, endpoint string) (*codexRPC, error) {
++	peer := 0
++	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
++		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", endpoint)
++		if err != nil {
++			return nil, err
++		}
++		peer, err = peerPID(conn)
++		if err != nil {
++			conn.Close()
++			return nil, err
++		}
++		return conn, nil
++	}}
++	conn, response, err := websocket.Dial(ctx, "ws://localhost/rpc", &websocket.DialOptions{HTTPClient: &http.Client{Transport: transport}})
++	if response != nil && response.Body != nil {
++		defer response.Body.Close()
++	}
++	if err != nil {
++		transport.CloseIdleConnections()
++		return nil, fmt.Errorf("connect to the running Codex daemon: %w", err)
++	}
++	conn.SetReadLimit(maxOutput)
++	rpc := &codexRPC{conn: conn, peerPID: peer}
++	var init json.RawMessage
++	if err = rpc.call(ctx, "initialize", map[string]any{"clientInfo": map[string]string{"name": "ptyd", "version": "dev"}, "capabilities": map[string]bool{"experimentalApi": false}}, &init); err != nil {
++		conn.CloseNow()
++		return nil, err
++	}
++	if err = rpc.send(ctx, map[string]string{"method": "initialized"}); err != nil {
++		conn.CloseNow()
++		return nil, err
++	}
++	return rpc, nil
++}
++func (r *codexRPC) send(ctx context.Context, message any) error {
++	raw, err := json.Marshal(message)
++	if err != nil {
++		return err
++	}
++	return r.conn.Write(ctx, websocket.MessageText, raw)
++}
++func (r *codexRPC) call(ctx context.Context, method string, params, out any) error {
++	r.seq++
++	id := r.seq
++	if err := r.send(ctx, map[string]any{"id": id, "method": method, "params": params}); err != nil {
++		return err
++	}
++	for range 10000 {
++		kind, raw, err := r.conn.Read(ctx)
++		if err != nil {
++			return fmt.Errorf("Codex %s: %w", method, err)
++		}
++		if kind != websocket.MessageText {
++			return fmt.Errorf("Codex returned a non-JSON protocol message")
++		}
++		var envelope struct {
++			ID     json.RawMessage `json:"id"`
++			Result json.RawMessage `json:"result"`
++			Error  *struct {
++				Message string `json:"message"`
++			} `json:"error"`
++		}
++		if err = json.Unmarshal(raw, &envelope); err != nil {
++			return fmt.Errorf("decode Codex response: %w", err)
++		}
++		if len(envelope.ID) == 0 {
++			continue
++		}
++		var received int
++		if json.Unmarshal(envelope.ID, &received) != nil || received != id {
++			return fmt.Errorf("Codex returned an unexpected response id")
++		}
++		if envelope.Error != nil {
++			return fmt.Errorf("Codex %s: %s", method, envelope.Error.Message)
++		}
++		if len(envelope.Result) == 0 {
++			return fmt.Errorf("Codex %s has no result", method)
++		}
++		if err = json.Unmarshal(envelope.Result, out); err != nil {
++			return fmt.Errorf("decode Codex %s: %w", method, err)
++		}
++		return nil
++	}
++	return fmt.Errorf("Codex emitted too many unrelated messages; refresh discovery")
++}
++
++func codexSessions(ctx context.Context) ([]Session, bool, error) {
++	var daemon struct {
++		Status     string `json:"status"`
++		SocketPath string `json:"socketPath"`
++	}
++	if err := commandJSON(ctx, "codex", []string{"app-server", "daemon", "version"}, &daemon); err != nil {
++		return nil, false, err
++	}
++	if daemon.Status != "running" || !filepath.IsAbs(daemon.SocketPath) {
++		return nil, false, fmt.Errorf("Codex shared daemon is not running; open Codex normally before importing")
++	}
++	// Pin this daemon instance's protected socket. The public rendezvous symlink
++	// can change during an upgrade; import must not connect to a different worker.
++	endpoint, err := filepath.EvalSymlinks(daemon.SocketPath)
++	if err != nil {
++		return nil, false, err
++	}
++	stat, err := os.Stat(endpoint)
++	if err != nil {
++		return nil, false, err
++	}
++	if stat.Mode()&os.ModeSocket == 0 {
++		return nil, false, fmt.Errorf("Codex endpoint is not a Unix socket")
++	}
++	rpc, err := dialCodex(ctx, endpoint)
++	if err != nil {
++		return nil, false, err
++	}
++	defer rpc.conn.CloseNow()
++	var loaded struct {
++		Data []string `json:"data"`
++	}
++	if err = rpc.call(ctx, "thread/loaded/list", map[string]any{}, &loaded); err != nil {
++		return nil, false, err
++	}
++	truncated := len(loaded.Data) > maxSessions
++	ids := loaded.Data[:min(len(loaded.Data), maxSessions)]
++	out := make([]Session, 0, len(ids))
++	seen := map[string]bool{}
++	for _, id := range ids {
++		ref := Ref{Codex, id}
++		if ref.Validate() != nil {
++			return nil, false, fmt.Errorf("Codex reported an unsupported session id")
++		}
++		if seen[id] {
++			continue
++		}
++		seen[id] = true
++		var response struct {
++			Thread struct {
++				ID        string          `json:"id"`
++				Name      string          `json:"name"`
++				CWD       string          `json:"cwd"`
++				Source    json.RawMessage `json:"source"`
++				CreatedAt int64           `json:"createdAt"`
++				Status    struct {
++					Type        string   `json:"type"`
++					ActiveFlags []string `json:"activeFlags"`
++				} `json:"status"`
++			} `json:"thread"`
++		}
++		if err = rpc.call(ctx, "thread/read", map[string]any{"threadId": id, "includeTurns": false}, &response); err != nil {
++			return nil, false, err
++		}
++		t := response.Thread
++		if t.ID != id {
++			return nil, false, fmt.Errorf("Codex returned a different session than requested")
++		}
++		var source string
++		if json.Unmarshal(t.Source, &source) != nil {
++			continue
++		} // native subagents are not independent foreground sessions
++		if source != "cli" && source != "vscode" && source != "appServer" {
++			continue
++		}
++		s := Session{Ref: ref, Name: t.Name, CWD: t.CWD, Status: t.Status.Type, StartedAt: time.Unix(t.CreatedAt, 0), Endpoint: endpoint, WorkerPID: rpc.peerPID}
++		switch t.Status.Type {
++		case "idle", "active":
++			s.Action = Attach
++		default:
++			s.Action = Unavailable
++			s.Reason = "Codex has not confirmed a loaded, attachable session; open it in Codex and refresh."
++		}
++		if len(t.Status.ActiveFlags) > 0 {
++			s.Status = t.Status.ActiveFlags[0]
++			s.WaitingFor = strings.Join(t.Status.ActiveFlags, ", ")
++		}
++		out = append(out, s)
++	}
++	return out, truncated, nil
++}
+diff --git a/internal/native/discover.go b/internal/native/discover.go
+new file mode 100644
+index 0000000..cf77c6f
+--- /dev/null
++++ b/internal/native/discover.go
+@@ -0,0 +1,191 @@
++package native
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"os/exec"
++	"regexp"
++	"sort"
++	"sync"
++	"time"
++)
++
++const maxSessions = 500
++const maxOutput = 4 << 20
++const timeout = 8 * time.Second
++
++var jobID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
++
++type Discoverer struct {
++	mu     sync.Mutex
++	cached Listing
++	at     time.Time
++}
++
++// List caches briefly so several overview clients do not spawn CLI probes on
++// every frame. Import uses Fresh and never authorizes from this cache.
++func (d *Discoverer) List(ctx context.Context) Listing {
++	d.mu.Lock()
++	defer d.mu.Unlock()
++	if !d.at.IsZero() && time.Since(d.at) < 5*time.Second {
++		return d.cached
++	}
++	out := d.Fresh(ctx)
++	if ctx.Err() == nil {
++		d.cached = out
++		d.at = time.Now()
++	}
++	return out
++}
++func (d *Discoverer) Fresh(ctx context.Context) Listing {
++	out := Listing{Sessions: []Session{}, Issues: []Issue{}}
++	type result struct {
++		provider  Provider
++		sessions  []Session
++		truncated bool
++		err       error
++	}
++	ch := make(chan result, 2)
++	for _, p := range []Provider{Codex, Claude} {
++		go func() {
++			probe, cancel := context.WithTimeout(ctx, timeout)
++			defer cancel()
++			var r result
++			r.provider = p
++			if p == Codex {
++				r.sessions, r.truncated, r.err = codexSessions(probe)
++			} else {
++				r.sessions, r.truncated, r.err = claudeSessions(probe)
++			}
++			ch <- r
++		}()
++	}
++	for range 2 {
++		r := <-ch
++		if r.err != nil {
++			out.Issues = append(out.Issues, Issue{r.provider, r.err.Error()})
++		} else {
++			out.Sessions = append(out.Sessions, r.sessions...)
++		}
++		out.Truncated = out.Truncated || r.truncated
++		if r.truncated {
++			out.Issues = append(out.Issues, Issue{r.provider, "Native discovery omitted records; exact import is unavailable until a complete listing can be read."})
++		}
++	}
++	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].Ref.Key() < out.Sessions[j].Ref.Key() })
++	sort.Slice(out.Issues, func(i, j int) bool { return out.Issues[i].Provider < out.Issues[j].Provider })
++	return out
++}
++
++type cappedOutput struct{ bytes.Buffer }
++
++func (w *cappedOutput) Write(p []byte) (int, error) {
++	if len(p) > maxOutput-w.Len() {
++		return 0, fmt.Errorf("native response exceeds %d bytes", maxOutput)
++	}
++	return w.Buffer.Write(p)
++}
++func commandJSON(ctx context.Context, program string, args []string, out any) error {
++	cmd := exec.CommandContext(ctx, program, args...)
++	cmd.WaitDelay = time.Second
++	var stdout, stderr cappedOutput
++	cmd.Stdout = &stdout
++	cmd.Stderr = &stderr
++	if err := cmd.Run(); err != nil {
++		return fmt.Errorf("%s query failed (%v); check that its CLI and native daemon are available", program, err)
++	}
++	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
++		return fmt.Errorf("%s returned an unsupported response: %w", program, err)
++	}
++	return nil
++}
++
++func claudeSessions(ctx context.Context) ([]Session, bool, error) {
++	var rows []struct {
++		CWD        string `json:"cwd"`
++		Kind       string `json:"kind"`
++		StartedAt  int64  `json:"startedAt"`
++		ID         string `json:"id"`
++		State      string `json:"state"`
++		PID        int    `json:"pid"`
++		Status     string `json:"status"`
++		WaitingFor string `json:"waitingFor"`
++		SessionID  string `json:"sessionId"`
++		Name       string `json:"name"`
++	}
++	if err := commandJSON(ctx, "claude", []string{"agents", "--json", "--all"}, &rows); err != nil {
++		return nil, false, err
++	}
++	truncated := len(rows) > maxSessions
++
++	out := make([]Session, 0, len(rows))
++	seen := map[string]bool{}
++	for _, r := range rows {
++		ref := Ref{Claude, r.SessionID}
++		if ref.Validate() != nil {
++			truncated = true
++			continue
++		}
++		s := Session{Ref: ref, Name: r.Name, CWD: r.CWD, Status: r.Status, WaitingFor: r.WaitingFor, WorkerPID: r.PID, StartedAt: time.UnixMilli(r.StartedAt), Handle: r.ID}
++		if s.Status == "" {
++			s.Status = r.State
++		}
++		switch r.Kind {
++		case "interactive":
++			s.Action = Background
++			s.Reason = "Run /bg in the original Claude tab, let its handoff finish, then refresh and import this session."
++		case "background":
++			if !jobID.MatchString(r.ID) {
++				s.Action = Unavailable
++				s.Reason = "Claude did not report a background job id; refresh after the handoff finishes."
++			} else if r.PID > 0 && (r.Status == "busy" || r.Status == "waiting" || r.Status == "idle") {
++				s.Action = Attach
++			} else if r.PID == 0 && (r.State == "done" || r.State == "failed" || r.State == "stopped") {
++				s.Action = Resume
++			} else {
++				s.Action = Unavailable
++				s.Reason = "Claude has not confirmed a live worker or a stopped conversation; refresh before importing."
++			}
++		default:
++			s.Action = Unavailable
++			s.Reason = "Claude reported an unsupported session kind; use its own agent view."
++		}
++		// A foreground record and its new background worker can coexist briefly.
++		// Fail closed during that handoff rather than choosing one by timestamp.
++		if seen[ref.Key()] {
++			for i := range out {
++				if out[i].Ref == ref {
++					out[i].Action = Unavailable
++					out[i].Reason = "Claude reports more than one worker for this conversation; finish the native handoff and refresh."
++				}
++			}
++			continue
++		}
++		seen[ref.Key()] = true
++		out = append(out, s)
++	}
++	return out[:min(len(out), maxSessions)], truncated || len(out) > maxSessions, nil
++}
++
++func (d *Discoverer) Lookup(ctx context.Context, ref Ref) (Session, error) {
++	if err := ref.Validate(); err != nil {
++		return Session{}, err
++	}
++	listing := d.Fresh(ctx)
++	for _, issue := range listing.Issues {
++		if issue.Provider == ref.Provider {
++			return Session{}, fmt.Errorf("%s: %s", issue.Provider, issue.Message)
++		}
++	}
++	for _, s := range listing.Sessions {
++		if s.Ref == ref {
++			return s, nil
++		}
++	}
++	if listing.Truncated {
++		return Session{}, fmt.Errorf("native listing was truncated; narrow the native session list and refresh")
++	}
++	return Session{}, fmt.Errorf("native session %s is no longer available; refresh discovery", ref.Key())
++}
+diff --git a/internal/native/discover_test.go b/internal/native/discover_test.go
+new file mode 100644
+index 0000000..1afb506
+--- /dev/null
++++ b/internal/native/discover_test.go
+@@ -0,0 +1,240 @@
++package native
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/coder/websocket"
++)
++
++const fixtureID = "11111111-1111-4111-8111-111111111111"
++
++func fixtureCLI(t *testing.T, name string, data any, exit int) {
++	t.Helper()
++	dir := t.TempDir()
++	raw, err := json.Marshal(data)
++	if err != nil {
++		t.Fatal(err)
++	}
++	script := fmt.Sprintf("#!/bin/sh\ncat <<'NATIVE_JSON'\n%s\nNATIVE_JSON\nexit %d\n", raw, exit)
++	if err = os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
++}
++func claudeRow(id, kind string, pid int) map[string]any {
++	return map[string]any{"sessionId": id, "kind": kind, "id": "job-one", "pid": pid, "status": "busy", "state": "working", "startedAt": int64(1700000000000), "name": "compile", "cwd": "/tmp"}
++}
++func TestClaudeHandoffAndPartialAuthority(t *testing.T) {
++	t.Run("foreground stays in original tab", func(t *testing.T) {
++		fixtureCLI(t, "claude", []any{claudeRow(fixtureID, "interactive", 23)}, 0)
++		rows, truncated, err := claudeSessions(context.Background())
++		if err != nil || truncated || len(rows) != 1 || rows[0].Action != Background {
++			t.Fatalf("%+v %v %v", rows, truncated, err)
++		}
++	})
++	t.Run("live background attaches without resume", func(t *testing.T) {
++		fixtureCLI(t, "claude", []any{claudeRow(fixtureID, "background", 23)}, 0)
++		rows, _, err := claudeSessions(context.Background())
++		if err != nil || len(rows) != 1 || rows[0].Action != Attach {
++			t.Fatalf("%+v %v", rows, err)
++		}
++		p, err := Plan(rows[0], false)
++		if err != nil || !reflect.DeepEqual(p.Args, []string{"attach", "job-one"}) {
++			t.Fatalf("%+v %v", p, err)
++		}
++	})
++	t.Run("duplicate beyond output budget still blocks", func(t *testing.T) {
++		rows := []any{claudeRow(fixtureID, "background", 23)}
++		for i := 1; i < maxSessions; i++ {
++			rows = append(rows, claudeRow(fmt.Sprintf("%08x-1111-4111-8111-111111111111", i+1), "background", i+100))
++		}
++		rows = append(rows, claudeRow(fixtureID, "interactive", 24))
++		fixtureCLI(t, "claude", rows, 0)
++		sessions, truncated, err := claudeSessions(context.Background())
++		if err != nil || !truncated || len(sessions) != maxSessions || sessions[0].Action != Unavailable {
++			t.Fatalf("first=%+v n=%d truncated=%v err=%v", sessions[0], len(sessions), truncated, err)
++		}
++		_, err = new(Discoverer).Lookup(context.Background(), Ref{Claude, fixtureID})
++		if err == nil {
++			t.Fatal("incomplete native authority authorized import")
++		}
++	})
++	t.Run("partial JSON followed by failed command is not success", func(t *testing.T) {
++		fixtureCLI(t, "claude", []any{claudeRow(fixtureID, "background", 23)}, 1)
++		if _, _, err := claudeSessions(context.Background()); err == nil {
++			t.Fatal("failed command accepted")
++		}
++	})
++}
++func TestPlanDoesNotSelectByNameOrReplayPrompts(t *testing.T) {
++	base := Session{Ref: Ref{Claude, fixtureID}, CWD: "/tmp", Handle: "job-1", Action: Attach, WorkerPID: os.Getpid()}
++	for _, action := range []Action{Background, Unavailable, "unknown"} {
++		s := base
++		s.Action = action
++		s.Reason = "not ready"
++		if _, err := Plan(s, true); err == nil {
++			t.Fatalf("authorized %s", action)
++		}
++	}
++	for _, id := range []string{"latest", "--last", fixtureID + "; touch /tmp/no", ""} {
++		s := base
++		s.Ref.ID = id
++		if _, err := Plan(s, true); err == nil {
++			t.Fatalf("authorized non-exact id %q", id)
++		}
++	}
++	s := base
++	s.Action = Resume
++	if _, err := Plan(s, false); err == nil {
++		t.Fatal("stopped worker resumed without opt-in")
++	}
++	if _, err := Plan(s, true); err != nil {
++		t.Fatal(err)
++	}
++	s = base
++	s.Handle = "--other-session"
++	if _, err := Plan(s, false); err == nil {
++		t.Fatal("option-shaped handle accepted")
++	}
++	s = Session{Ref: Ref{Codex, fixtureID}, CWD: "/tmp", Endpoint: "/private/tmp/native daemon/rpc.sock", Action: Attach, WorkerPID: os.Getpid()}
++	p, err := Plan(s, false)
++	if err != nil || !reflect.DeepEqual(p.Args, []string{"resume", "--remote", "unix:///private/tmp/native daemon/rpc.sock", "--", fixtureID}) {
++		t.Fatalf("%+v %v", p, err)
++	}
++}
++func TestCodexDiscoveryUsesReadOnlyRPCAndPinsTheDaemon(t *testing.T) {
++	dir, err := os.MkdirTemp("/tmp", "ptyd-native-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { os.RemoveAll(dir) })
++	socket := filepath.Join(dir, "rpc.sock")
++	ln, err := net.Listen("unix", socket)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var mu sync.Mutex
++	var methods []string
++	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path != "/rpc" {
++			t.Errorf("wrong endpoint %s", r.URL.Path)
++			return
++		}
++		c, err := websocket.Accept(w, r, nil)
++		if err != nil {
++			return
++		}
++		defer c.CloseNow()
++		for {
++			_, raw, err := c.Read(r.Context())
++			if err != nil {
++				return
++			}
++			var req struct {
++				ID     json.RawMessage `json:"id"`
++				Method string          `json:"method"`
++				Params json.RawMessage `json:"params"`
++			}
++			if json.Unmarshal(raw, &req) != nil {
++				return
++			}
++			mu.Lock()
++			methods = append(methods, req.Method)
++			mu.Unlock()
++			if len(req.ID) == 0 {
++				continue
++			}
++			var out any
++			switch req.Method {
++			case "initialize":
++				out = map[string]any{"userAgent": "fixture"}
++			case "thread/loaded/list":
++				out = map[string]any{"data": []string{fixtureID}}
++			case "thread/read":
++				var p struct {
++					ID    string `json:"threadId"`
++					Turns bool   `json:"includeTurns"`
++				}
++				if json.Unmarshal(req.Params, &p) != nil || p.ID != fixtureID || p.Turns {
++					t.Error("read altered scope or requested history")
++				}
++				out = map[string]any{"thread": map[string]any{"id": fixtureID, "cwd": "/tmp", "name": "fixture", "source": "cli", "createdAt": 1700000000, "status": map[string]any{"type": "active", "activeFlags": []string{"waitingOnApproval"}}}}
++			default:
++				t.Errorf("discovery attempted %s", req.Method)
++				return
++			}
++			response, _ := json.Marshal(map[string]any{"id": req.ID, "result": out})
++			if c.Write(r.Context(), websocket.MessageText, response) != nil {
++				return
++			}
++		}
++	}))
++	server.Listener = ln
++	server.Start()
++	t.Cleanup(server.Close)
++	alias := filepath.Join(dir, "rendezvous.sock")
++	if err = os.Symlink(socket, alias); err != nil {
++		t.Fatal(err)
++	}
++	fixtureCLI(t, "codex", map[string]any{"status": "running", "socketPath": alias}, 0)
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	rows, truncated, err := codexSessions(ctx)
++	if err != nil || truncated || len(rows) != 1 {
++		t.Fatalf("%+v %v %v", rows, truncated, err)
++	}
++	if rows[0].Action != Attach || rows[0].WorkerPID != os.Getpid() || rows[0].Endpoint != func() string { v, _ := filepath.EvalSymlinks(socket); return v }() || rows[0].Status != "waitingOnApproval" {
++		t.Fatalf("wrong identity/status %+v", rows[0])
++	}
++	mu.Lock()
++	defer mu.Unlock()
++	if !reflect.DeepEqual(methods, []string{"initialize", "initialized", "thread/loaded/list", "thread/read"}) {
++		t.Fatalf("methods: %v", methods)
++	}
++}
++func TestNativeLimitsAndCancellation(t *testing.T) {
++	var output cappedOutput
++	if _, err := output.Write(make([]byte, maxOutput)); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := output.Write([]byte("x")); err == nil || output.Len() != maxOutput {
++		t.Fatal("output grew beyond cap")
++	}
++	dir := t.TempDir()
++	path := filepath.Join(dir, "waiting-agent")
++	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 30\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
++	defer cancel()
++	start := time.Now()
++	var out any
++	if err := commandJSON(ctx, path, nil, &out); err == nil {
++		t.Fatal("cancelled probe succeeded")
++	}
++	if time.Since(start) > 2*time.Second {
++		t.Fatal("probe did not cancel promptly")
++	}
++	t.Setenv("PATH", dir)
++	listing := new(Discoverer).Fresh(context.Background())
++	if len(listing.Issues) != 2 || len(listing.Sessions) != 0 {
++		t.Fatalf("missing runtimes look complete: %+v", listing)
++	}
++	for _, issue := range listing.Issues {
++		if !strings.Contains(issue.Message, "query failed") {
++			t.Fatal(issue.Message)
++		}
++	}
++}
+diff --git a/internal/native/peer_darwin.go b/internal/native/peer_darwin.go
+new file mode 100644
+index 0000000..46280f6
+--- /dev/null
++++ b/internal/native/peer_darwin.go
+@@ -0,0 +1,21 @@
++package native
++
++import (
++	"net"
++
++	"golang.org/x/sys/unix"
++)
++
++func peerPID(conn net.Conn) (int, error) {
++	raw, err := conn.(*net.UnixConn).SyscallConn()
++	if err != nil {
++		return 0, err
++	}
++	var pid int
++	var socketErr error
++	err = raw.Control(func(fd uintptr) { pid, socketErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID) })
++	if err != nil {
++		return 0, err
++	}
++	return pid, socketErr
++}
+diff --git a/internal/native/peer_linux.go b/internal/native/peer_linux.go
+new file mode 100644
+index 0000000..110136c
+--- /dev/null
++++ b/internal/native/peer_linux.go
+@@ -0,0 +1,27 @@
++package native
++
++import (
++	"net"
++
++	"golang.org/x/sys/unix"
++)
++
++func peerPID(conn net.Conn) (int, error) {
++	raw, err := conn.(*net.UnixConn).SyscallConn()
++	if err != nil {
++		return 0, err
++	}
++	var pid int
++	var socketErr error
++	err = raw.Control(func(fd uintptr) {
++		credentials, e := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
++		socketErr = e
++		if e == nil {
++			pid = int(credentials.Pid)
++		}
++	})
++	if err != nil {
++		return 0, err
++	}
++	return pid, socketErr
++}
+diff --git a/internal/native/session.go b/internal/native/session.go
+new file mode 100644
+index 0000000..d7fcc55
+--- /dev/null
++++ b/internal/native/session.go
+@@ -0,0 +1,121 @@
++// Package native discovers agent sessions through the agents' own local APIs.
++// It never starts, stops or resumes a worker during discovery.
++package native
++
++import (
++	"context"
++	"fmt"
++	"path/filepath"
++	"regexp"
++	"time"
++)
++
++type Provider string
++
++const (
++	Codex  Provider = "codex"
++	Claude Provider = "claude"
++)
++
++type Ref struct {
++	Provider Provider `json:"provider"`
++	ID       string   `json:"id"`
++}
++
++func (r Ref) Key() string { return string(r.Provider) + ":" + r.ID }
++
++var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
++
++func (r Ref) Validate() error {
++	if r.Provider != Codex && r.Provider != Claude {
++		return fmt.Errorf("provider must be codex or claude")
++	}
++	if !uuid.MatchString(r.ID) {
++		return fmt.Errorf("session id must be a full UUID")
++	}
++	return nil
++}
++
++type Action string
++
++const (
++	Attach      Action = "attach"
++	Background  Action = "background"
++	Resume      Action = "resume"
++	Unavailable Action = "unavailable"
++)
++
++type Session struct {
++	Ref        Ref       `json:"ref"`
++	Name       string    `json:"name"`
++	CWD        string    `json:"cwd"`
++	Status     string    `json:"status"`
++	WaitingFor string    `json:"waiting_for,omitempty"`
++	Action     Action    `json:"action"`
++	Reason     string    `json:"reason,omitempty"`
++	WorkerPID  int       `json:"worker_pid,omitempty"`
++	StartedAt  time.Time `json:"started_at"`
++	// Handle is a Claude background job id, not a transcript/session-id guess.
++	Handle   string `json:"handle,omitempty"`
++	Endpoint string `json:"-"`
++}
++
++type Issue struct {
++	Provider Provider `json:"provider"`
++	Message  string   `json:"message"`
++}
++type Listing struct {
++	Sessions  []Session `json:"sessions"`
++	Issues    []Issue   `json:"issues"`
++	Truncated bool      `json:"truncated"`
++}
++
++type Launch struct {
++	Command string
++	Args    []string
++	CWD     string
++}
++
++// Plan is a pure decision. Only fresh native observations can authorize a
++// frontend launch; an HTTP caller cannot supply argv, a directory or a job id.
++func Plan(s Session, allowResume bool) (Launch, error) {
++	if err := s.Ref.Validate(); err != nil {
++		return Launch{}, err
++	}
++	if !filepath.IsAbs(s.CWD) {
++		return Launch{}, fmt.Errorf("native session has no absolute working directory")
++	}
++	switch s.Action {
++	case Attach:
++		if s.WorkerPID <= 0 {
++			return Launch{}, fmt.Errorf("native provider did not identify a live hosting process")
++		}
++	case Resume:
++		if !allowResume {
++			return Launch{}, fmt.Errorf("session is stopped; import with --resume to continue its saved conversation")
++		}
++	case Background, Unavailable:
++		return Launch{}, fmt.Errorf("%s", s.Reason)
++	default:
++		return Launch{}, fmt.Errorf("unrecognized native action %q; refresh discovery", s.Action)
++	}
++	switch s.Ref.Provider {
++	case Codex:
++		if s.Action != Attach {
++			return Launch{}, fmt.Errorf("Codex session is not loaded; open it in Codex before importing")
++		}
++		if !filepath.IsAbs(s.Endpoint) {
++			return Launch{}, fmt.Errorf("Codex did not report a local daemon endpoint")
++		}
++		return Launch{Command: "codex", Args: []string{"resume", "--remote", "unix://" + s.Endpoint, "--", s.Ref.ID}, CWD: s.CWD}, nil
++	case Claude:
++		if !jobID.MatchString(s.Handle) {
++			return Launch{}, fmt.Errorf("Claude did not report a valid background job id; run /bg in its original tab")
++		}
++		return Launch{Command: "claude", Args: []string{"attach", s.Handle}, CWD: s.CWD}, nil
++	}
++	return Launch{}, fmt.Errorf("unsupported provider")
++}
++
++// Discovery is also implemented by deterministic integration fixtures.
++type Discovery interface{ List(context.Context) Listing }
+diff --git a/internal/terminal/attach.go b/internal/terminal/attach.go
+index c150dc4..9114672 100644
+--- a/internal/terminal/attach.go
++++ b/internal/terminal/attach.go
+@@ -2,6 +2,7 @@ package terminal
+ 
+ import (
+ 	"context"
++	"fmt"
+ 	"io"
+ 	"sync"
+ 	"time"
+@@ -114,6 +115,16 @@ func (m *Manager) Attach(id ID, cols, rows uint16, readOnly bool) (*Attachment,
+ 	}
+ 	a := &attacher{wake: make(chan struct{}, 1)}
+ 	t.scrMu.Lock()
++	if t.cfg.source.Provider != "" {
++		if t.nativeClosing {
++			t.scrMu.Unlock()
++			return nil, fmt.Errorf("native view has closed; refresh discovery and import again")
++		}
++		if t.nativeDeadline != nil {
++			t.nativeDeadline.Stop()
++			t.nativeDeadline = nil
++		}
++	}
+ 	initial := t.screen.Repaint(true)
+ 	if t.outputEnded {
+ 		a.ended = true
+@@ -276,9 +287,25 @@ func (at *Attachment) Close() {
+ 		at.t.scrMu.Lock()
+ 		delete(at.t.attachers, at.a)
+ 		at.t.attached.Store(int32(len(at.t.attachers)))
++		closeNative := at.t.cfg.source.Provider != "" && len(at.t.attachers) == 0
++		if closeNative {
++			at.t.nativeClosing = true
++			if at.t.outputEnded && at.t.mgr != nil {
++				// EOF reaches the CLI before it reads the process exit status.
++				// Keep that result briefly instead of racing its GET with 404.
++				if at.t.nativeDeadline != nil {
++					at.t.nativeDeadline.Stop()
++				}
++				at.t.nativeDeadline = time.AfterFunc(time.Minute, func() { _ = at.t.mgr.Close(at.t.info.ID) })
++				closeNative = false
++			}
++		}
+ 		at.t.scrMu.Unlock()
+ 		if at.t.mgr != nil {
+ 			at.t.mgr.activeSubs.Add(-1)
++			if closeNative {
++				_ = at.t.mgr.Close(at.t.info.ID)
++			}
+ 		}
+ 	})
+ }
+@@ -302,3 +329,28 @@ func (t *terminal) endAttachers() {
+ 	t.attached.Store(0)
+ 	t.scrMu.Unlock()
+ }
++
++// An abandoned import request must not leave a native frontend running forever.
++// The deadline ends once an attachment claims the view; last detach closes it.
++func (m *Manager) expireNativeView(id ID) {
++	t, err := m.get(id)
++	if err != nil {
++		return
++	}
++	t.scrMu.Lock()
++	defer t.scrMu.Unlock()
++	if t.cfg.source.Provider == "" || len(t.attachers) > 0 || t.nativeClosing {
++		return
++	}
++	t.nativeDeadline = time.AfterFunc(time.Minute, func() {
++		t.scrMu.Lock()
++		closeView := len(t.attachers) == 0 && !t.nativeClosing
++		if closeView {
++			t.nativeClosing = true
++		}
++		t.scrMu.Unlock()
++		if closeView {
++			_ = m.Close(id)
++		}
++	})
++}
+diff --git a/internal/terminal/import.go b/internal/terminal/import.go
+new file mode 100644
+index 0000000..8b68848
+--- /dev/null
++++ b/internal/terminal/import.go
+@@ -0,0 +1,134 @@
++package terminal
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"time"
++	"unicode/utf8"
++
++	"github.com/2018kguo/ptyd/internal/native"
++)
++
++var ErrImportDeclined = errors.New("native import declined")
++
++type ImportRequest struct {
++	Ref    native.Ref `json:"ref"`
++	Name   string     `json:"name,omitempty"`
++	Resume bool       `json:"resume,omitempty"`
++	Cols   uint16     `json:"cols,omitempty"`
++	Rows   uint16     `json:"rows,omitempty"`
++}
++type ImportResult struct {
++	Terminal Info           `json:"terminal"`
++	Session  native.Session `json:"session"`
++	Reused   bool           `json:"reused"`
++}
++
++// NativeLookup bypasses the overview cache and resolves an exact conversation.
++type NativeLookup interface {
++	Lookup(context.Context, native.Ref) (native.Session, error)
++}
++
++// ImportAgent creates a terminal frontend for an existing native conversation.
++// Native workers remain owned by their daemon; closing this terminal only
++// closes its client. The source reference is part of the normal registry and
++// persistence, so import retries and daemon restarts do not invent a new owner.
++func (m *Manager) ImportAgent(ctx context.Context, lookup NativeLookup, req ImportRequest) (ImportResult, error) {
++	if err := req.Ref.Validate(); err != nil {
++		return ImportResult{}, fmt.Errorf("%w: %v", ErrImportDeclined, err)
++	}
++	m.importMu.Lock()
++	defer m.importMu.Unlock()
++	if err := ctx.Err(); err != nil {
++		return ImportResult{}, err
++	}
++	observed, err := lookup.Lookup(ctx, req.Ref)
++	if err != nil {
++		return ImportResult{}, fmt.Errorf("%w: %v", ErrImportDeclined, err)
++	}
++	if observed.Ref != req.Ref {
++		return ImportResult{}, fmt.Errorf("%w: native provider returned a different conversation", ErrImportDeclined)
++	}
++	var stopped []ID
++	for _, info := range m.List() {
++		if info.Source != req.Ref && !(info.Agent == string(req.Ref.Provider) && info.AgentSession == req.Ref.ID) {
++			continue
++		}
++		if info.Status == StatusRunning {
++			if info.Source.Provider != "" {
++				return ImportResult{}, fmt.Errorf("%w: imported window %s already exists; attach that window explicitly or close it first. Its original conversation is launch provenance, not a verified current input target", ErrImportDeclined, info.ID)
++			}
++			return ImportResult{Terminal: info, Session: observed, Reused: true}, nil
++		}
++		if info.Source.Provider != "" {
++			stopped = append(stopped, info.ID)
++		}
++	}
++	plan, err := native.Plan(observed, req.Resume)
++	if err != nil {
++		return ImportResult{}, fmt.Errorf("%w: %v", ErrImportDeclined, err)
++	}
++	identity := ""
++	if observed.WorkerPID > 0 {
++		identity, err = procIdentity(observed.WorkerPID)
++		if err != nil {
++			return ImportResult{}, fmt.Errorf("%w: cannot verify native worker: %v", ErrImportDeclined, err)
++		}
++	}
++	name := req.Name
++	if name == "" {
++		name = observed.Name
++	}
++	if name == "" {
++		name = string(req.Ref.Provider) + "-" + req.Ref.ID[:8]
++	}
++	for len(name) > maxNameLen {
++		_, n := utf8.DecodeLastRuneInString(name)
++		name = name[:len(name)-n]
++	}
++	if err = ctx.Err(); err != nil {
++		return ImportResult{}, err
++	}
++	info, err := m.Create(CreateConfig{Name: name, CWD: plan.CWD, Command: plan.Command, Args: plan.Args, Cols: req.Cols, Rows: req.Rows, Restore: RestoreNone, source: req.Ref})
++	if err != nil {
++		return ImportResult{}, err
++	}
++	// A successful fork/exec only confirms a frontend, not worker identity.
++	// Check the native authority again before reporting a live import. Never
++	// close the old tab or send input to make a handoff appear successful.
++	current, err := lookup.Lookup(ctx, req.Ref)
++	if err == nil && observed.Action == native.Resume {
++		confirmation, cancel := context.WithTimeout(ctx, 4*time.Second)
++		for err == nil && (current.Action != native.Attach || current.WorkerPID <= 0) {
++			select {
++			case <-confirmation.Done():
++				err = fmt.Errorf("native daemon has not confirmed the resumed worker; refresh discovery")
++			case <-time.After(100 * time.Millisecond):
++				current, err = lookup.Lookup(confirmation, req.Ref)
++			}
++		}
++		cancel()
++	}
++	if err == nil && (current.Ref != observed.Ref || current.CWD != observed.CWD || (observed.Action == native.Attach && (current.Action != native.Attach || current.WorkerPID != observed.WorkerPID || current.Endpoint != observed.Endpoint))) {
++		err = fmt.Errorf("native worker changed during import; refresh and try again")
++	}
++	if err == nil && current.WorkerPID > 0 {
++		after, e := procIdentity(current.WorkerPID)
++		if e != nil || (identity != "" && after != identity) {
++			err = fmt.Errorf("native process identity changed during import")
++		}
++	}
++	if err == nil {
++		err = ctx.Err()
++	}
++	if err != nil {
++		_ = m.Close(info.ID)
++		return ImportResult{}, fmt.Errorf("%w: %v", ErrImportDeclined, err)
++	}
++	m.expireNativeView(info.ID)
++	for _, id := range stopped {
++		_ = m.Close(id)
++	}
++	return ImportResult{Terminal: info, Session: current}, nil
++}
+diff --git a/internal/terminal/import_test.go b/internal/terminal/import_test.go
+new file mode 100644
+index 0000000..70e9597
+--- /dev/null
++++ b/internal/terminal/import_test.go
+@@ -0,0 +1,330 @@
++package terminal
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"syscall"
++	"testing"
++	"time"
++
++	"github.com/2018kguo/ptyd/internal/native"
++)
++
++const importFixtureID = "11111111-1111-4111-8111-111111111111"
++
++type nativeLookupFunc func(context.Context, native.Ref) (native.Session, error)
++
++func (f nativeLookupFunc) Lookup(ctx context.Context, r native.Ref) (native.Session, error) {
++	return f(ctx, r)
++}
++func importFixture(t *testing.T) (*Manager, native.Session, nativeLookupFunc, *os.Process) {
++	t.Helper()
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nprintf 'native frontend\\n'\nexec cat\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
++	worker := exec.Command("sleep", "60")
++	if err := worker.Start(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = worker.Process.Kill(); _ = worker.Wait() })
++	m := NewManagerWithOptions(Options{PersistDir: filepath.Join(dir, "state")})
++	t.Cleanup(m.CloseAll)
++	session := native.Session{Ref: native.Ref{Provider: native.Claude, ID: importFixtureID}, Name: "fixture", CWD: dir, Status: "busy", Action: native.Attach, WorkerPID: worker.Process.Pid, StartedAt: time.Now(), Handle: "job-fixture"}
++	lookup := nativeLookupFunc(func(ctx context.Context, r native.Ref) (native.Session, error) {
++		if err := ctx.Err(); err != nil {
++			return native.Session{}, err
++		}
++		if r != session.Ref {
++			return native.Session{}, fmt.Errorf("wrong ref")
++		}
++		return session, nil
++	})
++	return m, session, lookup, worker.Process
++}
++func assertWorkerAlive(t *testing.T, p *os.Process) {
++	t.Helper()
++	if err := p.Signal(syscall.Signal(0)); err != nil {
++		t.Fatalf("native worker was stopped: %v", err)
++	}
++}
++func TestImportCreatesAViewAndLastDetachKeepsNativeWorker(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	identity, _ := procIdentity(worker.Pid)
++	result, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result.Terminal.PID == worker.Pid || result.Terminal.Source != session.Ref || result.Reused {
++		t.Fatalf("wrong frontend identity: %+v", result)
++	}
++	a, err := m.Attach(result.Terminal.ID, 80, 24, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	a.Close()
++	a.Close()
++	if _, err = m.Get(result.Terminal.ID); !errors.Is(err, ErrNotFound) {
++		t.Fatalf("temporary view retained: %v", err)
++	}
++	assertWorkerAlive(t, worker)
++	after, _ := procIdentity(worker.Pid)
++	if after != identity {
++		t.Fatal("worker generation changed")
++	}
++}
++func TestImportCannotReuseLaunchProvenanceAsCurrentConversation(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	first, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil {
++		t.Fatal(err)
++	}
++	// The CLI may have navigated to B. No API asserts current identity for this
++	// imported frontend, so a request for A must never receive that window.
++	again, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if !errors.Is(err, ErrImportDeclined) || again.Terminal.ID != "" || !strings.Contains(err.Error(), string(first.Terminal.ID)) {
++		t.Fatalf("unverified reuse: %+v %v", again, err)
++	}
++	if len(m.List()) != 1 || m.totalCreated.Load() != 1 {
++		t.Fatal("retry created duplicate frontends")
++	}
++	listing := native.Listing{Sessions: []native.Session{session}}
++	view := BuildDiscoveredOverview(m.List(), listing, OverviewOptions{})
++	if len(view.Sessions) != 1 || view.Sessions[0].External == nil || view.Counts.External != 1 {
++		t.Fatalf("launch provenance hid native A: %+v", view)
++	}
++	assertWorkerAlive(t, worker)
++}
++func TestConcurrentImportsDoNotCreateDuplicateFrontends(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	var created, declined atomic.Int32
++	var wg sync.WaitGroup
++	for range 16 {
++		wg.Go(func() {
++			result, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++			switch {
++			case err == nil && !result.Reused:
++				created.Add(1)
++			case errors.Is(err, ErrImportDeclined):
++				declined.Add(1)
++			default:
++				t.Errorf("%+v %v", result, err)
++			}
++		})
++	}
++	wg.Wait()
++	if created.Load() != 1 || declined.Load() != 15 || m.totalCreated.Load() != 1 {
++		t.Fatalf("created=%d declined=%d total=%d", created.Load(), declined.Load(), m.totalCreated.Load())
++	}
++	assertWorkerAlive(t, worker)
++}
++func TestImportDeclinesChangedWorkerAndCleansOnlyItsFrontend(t *testing.T) {
++	m, session, _, worker := importFixture(t)
++	var calls int
++	lookup := nativeLookupFunc(func(context.Context, native.Ref) (native.Session, error) {
++		calls++
++		s := session
++		if calls > 1 {
++			s.CWD = "/different-project"
++		}
++		return s, nil
++	})
++	_, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if !errors.Is(err, ErrImportDeclined) || len(m.List()) != 0 {
++		t.Fatalf("changed worker accepted or leaked view: %v %+v", err, m.List())
++	}
++	assertWorkerAlive(t, worker)
++}
++func TestNativeSourceSurvivesRestartButCannotBypassFreshImport(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	first, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = m.Restart(first.Terminal.ID); err == nil {
++		t.Fatal("generic restart bypassed native validation")
++	}
++	m.CloseAll()
++	assertWorkerAlive(t, worker)
++	restored := NewManagerWithOptions(m.opts)
++	t.Cleanup(restored.CloseAll)
++	restored.RestoreGhosts()
++	rows := restored.List()
++	if len(rows) != 1 || rows[0].Source != session.Ref || rows[0].Status == StatusRunning {
++		t.Fatalf("bad ghost state: %+v", rows)
++	}
++	if _, err = restored.Restore(first.Terminal.ID, RestoreRerun); err == nil {
++		t.Fatal("generic restore bypassed native validation")
++	}
++	next, err := restored.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if next.Terminal.ID == first.Terminal.ID || len(restored.List()) != 1 {
++		t.Fatal("stopped view was reused or left duplicated")
++	}
++	assertWorkerAlive(t, worker)
++}
++func TestImportRequiresExplicitResumeAndMatchingIdentity(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	for _, action := range []native.Action{native.Background, native.Unavailable, native.Resume} {
++		s := session
++		s.Action = action
++		s.Reason = "finish handoff"
++		_, err := m.ImportAgent(context.Background(), nativeLookupFunc(func(context.Context, native.Ref) (native.Session, error) { return s, nil }), ImportRequest{Ref: session.Ref})
++		if !errors.Is(err, ErrImportDeclined) || m.totalCreated.Load() != 0 {
++			t.Fatalf("authorized %s: %v", action, err)
++		}
++	}
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	if _, err := m.ImportAgent(ctx, lookup, ImportRequest{Ref: session.Ref}); !errors.Is(err, context.Canceled) {
++		t.Fatal(err)
++	}
++	if len(m.List()) != 0 {
++		t.Fatal("cancelled import created frontend")
++	}
++	assertWorkerAlive(t, worker)
++}
++
++func TestImportResumeWaitsForNativeWorkerConfirmation(t *testing.T) {
++	m, session, _, worker := importFixture(t)
++	var calls int
++	lookup := nativeLookupFunc(func(context.Context, native.Ref) (native.Session, error) {
++		calls++
++		s := session
++		if calls < 3 {
++			s.Action = native.Resume
++			s.WorkerPID = 0
++		}
++		return s, nil
++	})
++	result, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref, Resume: true})
++	if err != nil || result.Session.Action != native.Attach || calls < 3 {
++		t.Fatalf("unconfirmed resume: %+v calls=%d %v", result, calls, err)
++	}
++	assertWorkerAlive(t, worker)
++}
++
++// Two clients can share a view. Releasing one must not remove the other's
++// frontend, and its native worker must outlive both.
++func TestNativeViewLivesUntilLastAttachment(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	result, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil {
++		t.Fatal(err)
++	}
++	first, err := m.Attach(result.Terminal.ID, 80, 24, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	second, err := m.Attach(result.Terminal.ID, 80, 24, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	first.Close()
++	info, err := m.Get(result.Terminal.ID)
++	if err != nil || info.Status != StatusRunning || info.Attached != 1 {
++		t.Fatalf("other client lost its view: %+v %v", info, err)
++	}
++	if err = second.Write([]byte("still attached\r")); err != nil {
++		t.Fatal(err)
++	}
++	second.Close()
++	if _, err = m.Get(result.Terminal.ID); !errors.Is(err, ErrNotFound) {
++		t.Fatalf("last detach retained view: %v", err)
++	}
++	assertWorkerAlive(t, worker)
++}
++
++func TestImportReusesCurrentManagedHookWithoutChangingItsLifetime(t *testing.T) {
++	bin, home, env := fakeAgentEnv(t)
++	dir := filepath.Join(t.TempDir(), "state")
++	m := NewManagerWithOptions(Options{PersistDir: dir})
++	t.Cleanup(m.CloseAll)
++	info, err := m.Create(CreateConfig{Name: "managed", Command: filepath.Join(bin, "claude"), CWD: t.TempDir(), Env: env, Restore: RestoreAgent})
++	if err != nil {
++		t.Fatal(err)
++	}
++	id := waitAgentSession(t, dir, info.ID, func(s string) bool { return s != "" })
++	session := native.Session{Ref: native.Ref{Provider: native.Claude, ID: id}, CWD: info.CWD, Action: native.Background, WorkerPID: info.PID}
++	lookup := nativeLookupFunc(func(context.Context, native.Ref) (native.Session, error) { return session, nil })
++	result, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil || !result.Reused || result.Terminal.ID != info.ID || result.Terminal.Source.Provider != "" {
++		t.Fatalf("managed session not reused: %+v %v", result, err)
++	}
++	a, err := m.Attach(result.Terminal.ID, 80, 24, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	a.Close()
++	current, err := m.Get(info.ID)
++	if err != nil || current.Status != StatusRunning || current.AgentSession != id {
++		t.Fatalf("managed lifetime changed: %+v %v", current, err)
++	}
++	if launches := fakeInvocations(home); len(launches) != 1 {
++		t.Fatalf("import relaunched a managed worker: %v", launches)
++	}
++	view := BuildDiscoveredOverview(m.List(), native.Listing{Sessions: []native.Session{session}}, OverviewOptions{})
++	if view.Counts.Total != 1 || view.Counts.External != 0 || view.Sessions[0].ID != info.ID {
++		t.Fatalf("managed hook not deduplicated: %+v", view)
++	}
++}
++
++func TestNativeFrontendExitStatusSurvivesOutputEOFAndLastDetach(t *testing.T) {
++	m, session, lookup, worker := importFixture(t)
++	script := "#!/bin/sh\nprintf 'ready\\n'\nread line\nexit 7\n"
++	if err := os.WriteFile(filepath.Join(session.CWD, "claude"), []byte(script), 0700); err != nil {
++		t.Fatal(err)
++	}
++	result, err := m.ImportAgent(context.Background(), lookup, ImportRequest{Ref: session.Ref})
++	if err != nil {
++		t.Fatal(err)
++	}
++	a, err := m.Attach(result.Terminal.ID, 80, 24, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = a.Write([]byte("exit\r")); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	for {
++		_, err = a.Read(ctx)
++		if err != nil {
++			break
++		}
++	}
++	if !errors.Is(err, io.EOF) {
++		t.Fatal(err)
++	}
++	a.Close()
++	for {
++		info, err := m.Get(result.Terminal.ID)
++		if err != nil {
++			t.Fatalf("last detach lost exit status: %v", err)
++		}
++		if info.ExitCode != nil {
++			if *info.ExitCode != 7 {
++				t.Fatalf("wrong exit status: %+v", info)
++			}
++			break
++		}
++		select {
++		case <-ctx.Done():
++			t.Fatal("exit status not reported")
++		case <-time.After(10 * time.Millisecond):
++		}
++	}
++	assertWorkerAlive(t, worker)
++}
+diff --git a/internal/terminal/manager.go b/internal/terminal/manager.go
+index 6b05dbf..3cc1ad4 100644
+--- a/internal/terminal/manager.go
++++ b/internal/terminal/manager.go
+@@ -60,10 +60,11 @@ type Options struct {
+ 
+ // Manager owns a set of PTY-backed terminal sessions.
+ type Manager struct {
+-	opts   Options
+-	mu     sync.RWMutex
+-	terms  map[ID]*terminal
+-	ghosts map[ID]Info // metadata-only entries from prior daemon runs
++	importMu sync.Mutex // serializes native import decisions, not ordinary terminal work
++	opts     Options
++	mu       sync.RWMutex
++	terms    map[ID]*terminal
++	ghosts   map[ID]Info // metadata-only entries from prior daemon runs
+ 	// restoring holds ghosts with a restore in progress.
+ 	restoring map[ID]bool
+ 	next      atomic.Int64
+@@ -99,11 +100,13 @@ type terminal struct {
+ 
+ 	// scrMu guards screen, the emulator fed with every byte of output, so
+ 	// the daemon knows what the window looks like.
+-	scrMu       sync.Mutex
+-	screen      *phosphor.Terminal
+-	attachers   map[*attacher]struct{} // guarded by scrMu
+-	outputEnded bool                   // guarded by scrMu
+-	attached    atomic.Int32           // len(attachers), read without scrMu
++	scrMu          sync.Mutex
++	screen         *phosphor.Terminal
++	attachers      map[*attacher]struct{} // guarded by scrMu
++	outputEnded    bool                   // guarded by scrMu
++	nativeClosing  bool                   // scrMu: last native viewer left; no new attachment may claim this frontend
++	nativeDeadline *time.Timer            // scrMu: bounds an imported frontend never claimed by an attachment
++	attached       atomic.Int32           // len(attachers), read without scrMu
+ 
+ 	// persist saves the screen under the persist dir (nil without one);
+ 	// ckptMu serializes its checkpoints.
+@@ -380,6 +383,7 @@ func (m *Manager) spawn(cfg CreateConfig, sp spawnSpec) (Info, error) {
+ 	t := &terminal{
+ 		mgr: m,
+ 		info: Info{
++			Source:     cfg.source,
+ 			ID:         sp.id,
+ 			Name:       cfg.Name,
+ 			CWD:        cfg.CWD,
+@@ -410,7 +414,7 @@ func (m *Manager) spawn(cfg CreateConfig, sp spawnSpec) (Info, error) {
+ 	// exits immediately must find meta.json in place for its exit.json,
+ 	// and a daemon that dies right now must find the new pid.
+ 	meta := persistedMeta{
+-		ID: sp.id, Name: cfg.Name, CWD: cfg.CWD, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env,
++		Source: cfg.source, ID: sp.id, Name: cfg.Name, CWD: cfg.CWD, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env,
+ 		Tags: cfg.Tags, Watches: cfg.Watches, Cols: cfg.Cols, Rows: cfg.Rows, Restore: cfg.Restore, Agent: cfg.Agent,
+ 		PID: pid, ProcIdentity: ident, CreatedAt: sp.createdAt, Restored: sp.restored, RestoredAt: restoredAt,
+ 	}
+@@ -855,6 +859,15 @@ func (m *Manager) CloseAll() {
+ // closeGrace), closes the PTY and waits for the child to be reaped. It
+ // reports whether the process was still running.
+ func (t *terminal) terminate() bool {
++	t.scrMu.Lock()
++	if t.nativeDeadline != nil {
++		t.nativeDeadline.Stop()
++		t.nativeDeadline = nil
++	}
++	if t.cfg.source.Provider != "" {
++		t.nativeClosing = true
++	}
++	t.scrMu.Unlock()
+ 	t.mu.Lock()
+ 	wasRunning := t.info.Status == StatusRunning
+ 	if wasRunning {
+@@ -889,6 +902,9 @@ func (t *terminal) exitCode() *int {
+ // Restart closes a terminal and spawns a new one with the same config.
+ // The new terminal has a different ID.
+ func (m *Manager) Restart(id ID) (Info, error) {
++	if info, err := m.Get(id); err == nil && info.Source.Provider != "" {
++		return Info{}, fmt.Errorf("import native session %s again to revalidate its worker", info.Source.Key())
++	}
+ 	t, err := m.get(id)
+ 	if err != nil {
+ 		return Info{}, err
+diff --git a/internal/terminal/native_claude_test.go b/internal/terminal/native_claude_test.go
+new file mode 100644
+index 0000000..9df611f
+--- /dev/null
++++ b/internal/terminal/native_claude_test.go
+@@ -0,0 +1,218 @@
++package terminal
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/2018kguo/ptyd/internal/native"
++)
++
++// This witness starts only a private Claude supervisor and a fake local
++// Messages stream. It never imports a worker from the user's configuration.
++func TestInstalledClaudeImportKeepsActiveWorker(t *testing.T) {
++	binary := os.Getenv("PTYD_CLAUDE_TEST_BIN")
++	if binary == "" {
++		t.Skip("set PTYD_CLAUDE_TEST_BIN to run the installed-CLI witness")
++	}
++	binary, err := filepath.Abs(binary)
++	if err != nil {
++		t.Fatal(err)
++	}
++	root, err := os.MkdirTemp("/tmp", "ptyd-claude-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	root, err = filepath.EvalSymlinks(root)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer os.RemoveAll(root)
++	profile := filepath.Join(root, "profile")
++	workspace := filepath.Join(root, "workspace")
++	bin := filepath.Join(root, "bin")
++	for _, p := range []string{profile, workspace, bin} {
++		if err = os.Mkdir(p, 0700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	active := make(chan struct{})
++	showOutput := make(chan struct{})
++	release := make(chan struct{})
++	var activeOnce, releaseOnce sync.Once
++	var requests atomic.Int32
++	finish := func() { releaseOnce.Do(func() { close(release) }) }
++	defer finish()
++	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = io.Copy(io.Discard, r.Body)
++		if strings.HasSuffix(r.URL.Path, "/count_tokens") {
++			w.Header().Set("Content-Type", "application/json")
++			fmt.Fprint(w, `{"input_tokens":1}`)
++			return
++		}
++		if !strings.HasSuffix(r.URL.Path, "/messages") {
++			http.Error(w, "fixture endpoint", 404)
++			return
++		}
++		requests.Add(1)
++		w.Header().Set("Content-Type", "text/event-stream")
++		flusher := w.(http.Flusher)
++		event := func(kind string, data map[string]any) {
++			data["type"] = kind
++			raw, _ := json.Marshal(data)
++			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, raw)
++			flusher.Flush()
++		}
++		event("message_start", map[string]any{"message": map[string]any{"id": "msg_fixture", "type": "message", "role": "assistant", "model": "fixture", "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": 1, "output_tokens": 0}}})
++		activeOnce.Do(func() { close(active) })
++		select {
++		case <-r.Context().Done():
++			return
++		case <-showOutput:
++		}
++		event("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
++		event("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": "PTYD_CLAUDE_ACTIVE_STREAM\n"}})
++		select {
++		case <-r.Context().Done():
++			return
++		case <-release:
++		}
++		event("content_block_stop", map[string]any{"index": 0})
++		event("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": 1}})
++		event("message_stop", map[string]any{})
++	}))
++	defer model.Close()
++	defer finish()
++	for _, entry := range os.Environ() {
++		key, _, _ := strings.Cut(entry, "=")
++		if strings.HasPrefix(key, "CLAUDE_") || strings.HasPrefix(key, "ANTHROPIC_") {
++			t.Setenv(key, "")
++		}
++	}
++	t.Setenv("CLAUDE_CONFIG_DIR", profile)
++	t.Setenv("ANTHROPIC_API_KEY", "ptyd-local-fixture-key")
++	t.Setenv("ANTHROPIC_BASE_URL", model.URL)
++	t.Setenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
++	t.Setenv("DISABLE_AUTOUPDATER", "1")
++	config := map[string]any{"hasCompletedOnboarding": true, "theme": "dark", "projects": map[string]any{workspace: map[string]any{"hasTrustDialogAccepted": true}}, "customApiKeyResponses": map[string]any{"approved": []string{"ptyd-local-fixture-key", "ptyd-local-fixture-key"[2:]}, "rejected": []any{}}}
++	raw, _ := json.Marshal(config)
++	if err = os.WriteFile(filepath.Join(profile, ".claude.json"), raw, 0600); err != nil {
++		t.Fatal(err)
++	}
++	// Pin cleanup to this private configuration even if a test changes env later.
++	fixtureEnv := os.Environ()
++	defer func() {
++		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++		defer cancel()
++		stop := exec.CommandContext(ctx, binary, "daemon", "stop", "--any")
++		stop.Env = fixtureEnv
++		stop.Dir = workspace
++		out, e := stop.CombinedOutput()
++		if e != nil {
++			t.Errorf("private supervisor cleanup: %v %s", e, out)
++		}
++	}()
++	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
++	defer cancel()
++	launch := exec.CommandContext(ctx, binary, "--bg", "--name", "ptyd-native-fixture", "--model", "haiku", "--permission-mode", "plan", "fixture stream only")
++	launch.Dir = workspace
++	launch.Env = fixtureEnv
++	if out, e := launch.CombinedOutput(); e != nil {
++		t.Fatalf("private native launch: %v %s", e, out)
++	}
++	select {
++	case <-active:
++	case <-ctx.Done():
++		t.Fatal("local Claude stream never started")
++	}
++	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\nprintf '{\"status\":\"stopped\"}\\n'\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	// Use exactly the binary under test for discovery and attach.
++	if err = os.Symlink(binary, filepath.Join(bin, "claude")); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
++	discovery := new(native.Discoverer)
++	listing := discovery.Fresh(ctx)
++	var sessions []native.Session
++	for _, s := range listing.Sessions {
++		if s.Ref.Provider == native.Claude {
++			sessions = append(sessions, s)
++		}
++	}
++	if len(sessions) != 1 {
++		t.Fatalf("fixture namespace does not contain exactly one session: %+v", listing)
++	}
++	before := sessions[0]
++	if before.Action != native.Attach || before.WorkerPID <= 0 {
++		t.Fatalf("not active: %+v", before)
++	}
++	identity, err := procIdentity(before.WorkerPID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	m := NewManager()
++	defer m.CloseAll()
++	imported, err := m.ImportAgent(ctx, discovery, ImportRequest{Ref: before.Ref, Cols: 120, Rows: 40})
++	if err != nil {
++		t.Fatal(err)
++	}
++	attachment, err := m.Attach(imported.Terminal.ID, 120, 40, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer attachment.Close()
++	for {
++		frame, e := m.Screen(imported.Terminal.ID, true)
++		if e != nil {
++			t.Fatal(e)
++		}
++		if strings.Contains(strings.Join(frame.Lines, "\n"), "Claude Code") {
++			break
++		}
++		if ctx.Err() != nil {
++			t.Fatalf("native frontend did not render: %+v", frame)
++		}
++		time.Sleep(30 * time.Millisecond)
++	}
++	close(showOutput)
++	for {
++		frame, e := m.Screen(imported.Terminal.ID, true)
++		if e != nil {
++			t.Fatal(e)
++		}
++		if strings.Contains(strings.Join(frame.Lines, "\n"), "PTYD_CLAUDE_ACTIVE_STREAM") {
++			break
++		}
++		if ctx.Err() != nil {
++			t.Fatalf("native frontend did not show active output: %+v", frame)
++		}
++		time.Sleep(30 * time.Millisecond)
++	}
++	attachment.Close()
++	after, err := discovery.Lookup(ctx, before.Ref)
++	if err != nil {
++		t.Fatal(err)
++	}
++	afterIdentity, err := procIdentity(after.WorkerPID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if after.WorkerPID != before.WorkerPID || identity != afterIdentity || after.Action != native.Attach || after.Status != "busy" || requests.Load() != 1 {
++		t.Fatalf("native worker/turn changed: before=%+v after=%+v requests=%d", before, after, requests.Load())
++	}
++	finish()
++	t.Log("real Claude frontend rendered an active local stream; detach preserved the native process generation, conversation id and single model request")
++}
+diff --git a/internal/terminal/native_codex_test.go b/internal/terminal/native_codex_test.go
+new file mode 100644
+index 0000000..363e634
+--- /dev/null
++++ b/internal/terminal/native_codex_test.go
+@@ -0,0 +1,323 @@
++package terminal
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"syscall"
++	"testing"
++	"time"
++
++	"github.com/2018kguo/ptyd/internal/native"
++	"github.com/coder/websocket"
++)
++
++// This optional witness uses the installed Codex binary, an isolated profile,
++// and a local fake Responses stream. No account credentials or real provider
++// are used. It keeps a turn active across native view attach and detach.
++func TestInstalledCodexImportKeepsActiveWorker(t *testing.T) {
++	binary := os.Getenv("PTYD_CODEX_TEST_BIN")
++	if binary == "" {
++		t.Skip("set PTYD_CODEX_TEST_BIN to run the installed-CLI witness")
++	}
++	binary, err := filepath.Abs(binary)
++	if err != nil {
++		t.Fatal(err)
++	}
++	root, err := os.MkdirTemp("/tmp", "ptyd-codex-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer os.RemoveAll(root)
++	home := filepath.Join(root, "profile")
++	workspace := filepath.Join(root, "workspace")
++	bin := filepath.Join(root, "bin")
++	for _, p := range []string{home, workspace, bin} {
++		if err = os.Mkdir(p, 0700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	active := make(chan struct{})
++	showOutput := make(chan struct{})
++	release := make(chan struct{})
++	var activeOnce sync.Once
++	var releaseOnce sync.Once
++	var requests atomic.Int32
++	finish := func() { releaseOnce.Do(func() { close(release) }) }
++	defer finish()
++	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = io.Copy(io.Discard, r.Body)
++		if !strings.HasSuffix(r.URL.Path, "/responses") {
++			http.Error(w, "fixture only accepts Responses requests", 404)
++			return
++		}
++		requests.Add(1)
++		w.Header().Set("Content-Type", "text/event-stream")
++		flusher := w.(http.Flusher)
++		event := func(kind string, data map[string]any) {
++			data["type"] = kind
++			raw, _ := json.Marshal(data)
++			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, raw)
++			flusher.Flush()
++		}
++		event("response.created", map[string]any{"response": map[string]any{"id": "resp_fixture", "object": "response", "status": "in_progress", "output": []any{}}})
++		activeOnce.Do(func() { close(active) })
++		select {
++		case <-r.Context().Done():
++			return
++		case <-showOutput:
++		}
++		item := map[string]any{"id": "msg_fixture", "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}}
++		event("response.output_item.added", map[string]any{"output_index": 0, "item": item})
++		event("response.content_part.added", map[string]any{"output_index": 0, "content_index": 0, "item_id": "msg_fixture", "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}}})
++		event("response.output_text.delta", map[string]any{"output_index": 0, "content_index": 0, "item_id": "msg_fixture", "delta": "PTYD_ACTIVE_STREAM\n"})
++		activeOnce.Do(func() { close(active) })
++		select {
++		case <-r.Context().Done():
++			return
++		case <-release:
++		}
++		item["status"] = "completed"
++		item["content"] = []any{map[string]any{"type": "output_text", "text": "PTYD_ACTIVE_STREAM\n", "annotations": []any{}}}
++		event("response.output_item.done", map[string]any{"output_index": 0, "item": item})
++		event("response.completed", map[string]any{"response": map[string]any{"id": "resp_fixture", "object": "response", "status": "completed", "model": "ptyd-fixture", "output": []any{item}, "usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
++	}))
++	defer model.Close()
++	defer finish()
++	config := fmt.Sprintf("check_for_update_on_startup = false\nmodel = \"ptyd-fixture\"\nmodel_provider = \"fixture\"\ncli_auth_credentials_store = \"file\"\n[model_providers.fixture]\nname = \"Local fixture\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = false\n[projects.%q]\ntrust_level = \"trusted\"\n", model.URL, workspace)
++	if err = os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0600); err != nil {
++		t.Fatal(err)
++	}
++	// Keep this test process and every spawned frontend on the fixture profile.
++	for _, entry := range os.Environ() {
++		key, _, _ := strings.Cut(entry, "=")
++		if strings.HasPrefix(key, "CODEX_") || strings.HasPrefix(key, "OPENAI_") || strings.HasPrefix(key, "CHATGPT_") {
++			t.Setenv(key, "")
++		}
++	}
++	t.Setenv("CODEX_HOME", home)
++	socket := filepath.Join(root, "rpc.sock")
++	log, err := os.Create(filepath.Join(root, "daemon.log"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer log.Close()
++	cmd := exec.Command(binary, "app-server", "--listen", "unix://"+socket)
++	cmd.Dir = workspace
++	cmd.Env = os.Environ()
++	cmd.Stdout = log
++	cmd.Stderr = log
++	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
++	if err = cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	stopped := make(chan struct{})
++	go func() { _ = cmd.Wait(); close(stopped) }()
++	defer func() {
++		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
++		select {
++		case <-stopped:
++		case <-time.After(3 * time.Second):
++			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
++			<-stopped
++		}
++	}()
++	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
++	defer cancel()
++	var conn *websocket.Conn
++	for conn == nil && ctx.Err() == nil {
++		tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
++			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
++		}}
++		conn, _, err = websocket.Dial(ctx, "ws://localhost/rpc", &websocket.DialOptions{HTTPClient: &http.Client{Transport: tr}})
++		if err != nil {
++			time.Sleep(30 * time.Millisecond)
++		}
++	}
++	if conn == nil {
++		raw, _ := os.ReadFile(filepath.Join(root, "daemon.log"))
++		t.Fatalf("fixture daemon failed: %v %s", err, raw)
++	}
++	defer conn.CloseNow()
++	seq := 0
++	call := func(method string, params any, out any) {
++		t.Helper()
++		seq++
++		id := seq
++		raw, _ := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
++		if e := conn.Write(ctx, websocket.MessageText, raw); e != nil {
++			t.Fatal(e)
++		}
++		for {
++			_, raw, e := conn.Read(ctx)
++			if e != nil {
++				t.Fatal(e)
++			}
++			var response struct {
++				ID     int             `json:"id"`
++				Result json.RawMessage `json:"result"`
++				Error  json.RawMessage `json:"error"`
++			}
++			if e = json.Unmarshal(raw, &response); e != nil {
++				t.Fatal(e)
++			}
++			if response.ID != id {
++				continue
++			}
++			if len(response.Error) > 0 {
++				t.Fatalf("%s: %s", method, response.Error)
++			}
++			if out != nil {
++				if e = json.Unmarshal(response.Result, out); e != nil {
++					t.Fatal(e)
++				}
++			}
++			return
++		}
++	}
++	call("initialize", map[string]any{"clientInfo": map[string]string{"name": "codex_cli_rs", "version": "test"}}, nil)
++	if err = conn.Write(ctx, websocket.MessageText, []byte(`{"method":"initialized"}`)); err != nil {
++		t.Fatal(err)
++	}
++	var started struct {
++		Thread struct {
++			ID string `json:"id"`
++		} `json:"thread"`
++	}
++	call("thread/start", map[string]any{"model": "ptyd-fixture", "modelProvider": "fixture", "cwd": workspace, "approvalPolicy": "never", "sandbox": "read-only", "threadSource": "cli"}, &started)
++	if started.Thread.ID == "" {
++		t.Fatal("fixture thread has no id")
++	}
++	call("thread/name/set", map[string]string{"threadId": started.Thread.ID, "name": "ptyd-native-fixture"}, nil)
++	call("turn/start", map[string]any{"threadId": started.Thread.ID, "input": []any{map[string]any{"type": "text", "text": "fixture stream only", "text_elements": []any{}}}}, nil)
++	select {
++	case <-active:
++	case <-ctx.Done():
++		raw, _ := os.ReadFile(filepath.Join(root, "daemon.log"))
++		t.Fatalf("local fixture stream never started: %s", raw)
++	}
++	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
++	status, _ := json.Marshal(map[string]string{"status": "running", "socketPath": socket})
++	wrapper := fmt.Sprintf("#!/bin/sh\nif [ \"$1 $2 $3\" = 'app-server daemon version' ]; then\ncat <<'JSON'\n%s\nJSON\nelse\nexec %s \"$@\"\nfi\n", status, quote(binary))
++	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte(wrapper), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf '[]\\n'\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
++	discovery := new(native.Discoverer)
++	ref := native.Ref{Provider: native.Codex, ID: started.Thread.ID}
++	// An independent existing CLI stays open while the second view attaches.
++	original := NewManager()
++	defer original.CloseAll()
++	old, err := original.Create(CreateConfig{Name: "original-cli", Command: binary, Args: []string{"resume", "--remote", "unix://" + socket, "--", ref.ID}, CWD: workspace, Cols: 120, Rows: 40})
++	if err != nil {
++		t.Fatal(err)
++	}
++	for {
++		frame, e := original.Screen(old.ID, false)
++		if e != nil {
++			t.Fatal(e)
++		}
++		if strings.Contains(strings.Join(frame.Lines, "\n"), "Working") {
++			break
++		}
++		if ctx.Err() != nil {
++			t.Fatalf("original frontend never joined active fixture: %+v", frame)
++		}
++		time.Sleep(30 * time.Millisecond)
++	}
++	oldIdentity, err := procIdentity(old.PID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	before, err := discovery.Lookup(ctx, ref)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if before.Status != "active" || before.WorkerPID <= 0 {
++		t.Fatalf("fixture is not active: %+v", before)
++	}
++	identity, err := procIdentity(before.WorkerPID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	m := NewManager()
++	defer m.CloseAll()
++	imported, err := m.ImportAgent(ctx, discovery, ImportRequest{Ref: ref, Cols: 120, Rows: 40})
++	if err != nil {
++		t.Fatal(err)
++	}
++	attachment, err := m.Attach(imported.Terminal.ID, 120, 40, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer attachment.Close()
++	for {
++		frame, e := m.Screen(imported.Terminal.ID, true)
++		if e != nil {
++			t.Fatal(e)
++		}
++		if strings.Contains(strings.Join(frame.Lines, "\n"), "Working") {
++			break
++		}
++		if ctx.Err() != nil {
++			t.Fatalf("native frontend did not join the active turn: %+v", frame)
++		}
++		time.Sleep(30 * time.Millisecond)
++	}
++	close(showOutput)
++	for {
++		frame, e := m.Screen(imported.Terminal.ID, true)
++		if e != nil {
++			t.Fatal(e)
++		}
++		if strings.Contains(strings.Join(frame.Lines, "\n"), "PTYD_ACTIVE_STREAM") {
++			break
++		}
++		if ctx.Err() != nil {
++			t.Fatalf("native frontend did not show active response: %+v", frame)
++		}
++		time.Sleep(30 * time.Millisecond)
++	}
++	oldAfter, err := procIdentity(old.PID)
++	if err != nil || oldAfter != oldIdentity {
++		t.Fatal("import interrupted the original native CLI")
++	}
++	if err = original.Close(old.ID); err != nil {
++		t.Fatal(err)
++	}
++	// Closing the original owned fixture tab hands viewing over to ptyd.
++	attachment.Close()
++	after, err := discovery.Lookup(ctx, ref)
++	if err != nil {
++		t.Fatal(err)
++	}
++	afterIdentity, err := procIdentity(after.WorkerPID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if after.WorkerPID != before.WorkerPID || afterIdentity != identity || after.Status != "active" || requests.Load() != 1 {
++		t.Fatalf("worker/turn changed: before=%+v after=%+v requests=%d", before, after, requests.Load())
++	}
++	var loaded struct {
++		Data []string `json:"data"`
++	}
++	call("thread/loaded/list", map[string]any{}, &loaded)
++	if len(loaded.Data) != 1 || loaded.Data[0] != ref.ID {
++		t.Fatalf("frontend forked or started another conversation: %v", loaded.Data)
++	}
++	finish()
++	t.Log("real Codex frontend rendered an active local stream; detach preserved the native process generation, conversation id and single model request")
++}
+diff --git a/internal/terminal/overview.go b/internal/terminal/overview.go
+index e473f38..147c3ed 100644
+--- a/internal/terminal/overview.go
++++ b/internal/terminal/overview.go
+@@ -6,6 +6,8 @@ import (
+ 	"slices"
+ 	"strings"
+ 	"unicode/utf8"
++
++	"github.com/2018kguo/ptyd/internal/native"
+ )
+ 
+ const (
+@@ -16,12 +18,14 @@ const (
+ 
+ // OverviewOptions select a bounded view of the canonical session list.
+ type OverviewOptions struct {
+-	Limit int
+-	Query string
+-	Tags  []string
++	Discover bool
++	Limit    int
++	Query    string
++	Tags     []string
+ }
+ 
+ type OverviewCounts struct {
++	External  int `json:"external"`
+ 	Total     int `json:"total"`
+ 	Running   int `json:"running"`
+ 	Exited    int `json:"exited"`
+@@ -39,14 +43,17 @@ type OverviewPreview struct {
+ type OverviewState string
+ 
+ const (
+-	OverviewRunning OverviewState = "running"
+-	OverviewStopped OverviewState = "stopped"
+-	OverviewExited  OverviewState = "exited"
++	OverviewExternal OverviewState = "external"
++	OverviewRunning  OverviewState = "running"
++	OverviewStopped  OverviewState = "stopped"
++	OverviewExited   OverviewState = "exited"
+ )
+ 
+ // SessionSummary leaves arguments, watch definitions and transcripts on the
+ // detail routes. LatestSeq lets an agent continue incremental output reads.
+ type SessionSummary struct {
++	Source      native.Ref       `json:"source,omitzero"`
++	External    *native.Session  `json:"external,omitempty"`
+ 	ID          ID               `json:"id"`
+ 	Name        string           `json:"name"`
+ 	CWD         string           `json:"cwd"`
+@@ -62,9 +69,11 @@ type SessionSummary struct {
+ }
+ 
+ type Overview struct {
+-	Counts    OverviewCounts   `json:"counts"`
+-	Sessions  []SessionSummary `json:"sessions"`
+-	Truncated bool             `json:"truncated"`
++	DiscoveryIssues    []native.Issue   `json:"discovery_issues,omitempty"`
++	DiscoveryTruncated bool             `json:"discovery_truncated,omitempty"`
++	Counts             OverviewCounts   `json:"counts"`
++	Sessions           []SessionSummary `json:"sessions"`
++	Truncated          bool             `json:"truncated"`
+ }
+ 
+ // Overview reads the existing registry once; it creates no session state.
+@@ -97,6 +106,9 @@ func BuildOverview(infos []Info, options OverviewOptions) Overview {
+ 			continue
+ 		}
+ 		out.Counts.Total++
++		if info.external != nil {
++			out.Counts.External++
++		}
+ 		if len(info.Attention) > 0 {
+ 			out.Counts.Attention++
+ 		}
+@@ -131,6 +143,7 @@ func BuildOverview(infos []Info, options OverviewOptions) Overview {
+ 			idle = &seconds
+ 		}
+ 		out.Sessions = append(out.Sessions, SessionSummary{
++			Source: info.Source, External: info.external,
+ 			ID: info.ID, Name: info.Name, CWD: info.CWD,
+ 			Command: filepath.Base(info.Command), Agent: info.Agent,
+ 			State: overviewState(info), ExitCode: info.ExitCode, IdleSeconds: idle,
+@@ -157,6 +170,9 @@ func overviewMatches(info Info, query string, tags []string) bool {
+ }
+ 
+ func overviewState(info Info) OverviewState {
++	if info.external != nil {
++		return OverviewExternal
++	}
+ 	if info.Status == StatusRunning {
+ 		return OverviewRunning
+ 	}
+@@ -205,3 +221,45 @@ func overviewPreview(info Info) *OverviewPreview {
+ 	}
+ 	return &OverviewPreview{Source: source, Text: text, Truncated: truncated}
+ }
++
++// BuildDiscoveredOverview uses native observations only for the requested view.
++// It adds no registry entries and suppresses sessions already owned by ptyd.
++func BuildDiscoveredOverview(infos []Info, listing native.Listing, options OverviewOptions) Overview {
++	owned := map[native.Ref]bool{}
++	merged := make([]Info, 0, len(infos)+len(listing.Sessions))
++	for _, info := range infos {
++		if info.Source.Provider != "" {
++			continue
++		}
++		merged = append(merged, info)
++		if info.Status == StatusRunning && info.AgentSession != "" {
++			owned[native.Ref{Provider: native.Provider(info.Agent), ID: info.AgentSession}] = true
++		}
++	}
++	for _, session := range listing.Sessions {
++		if owned[session.Ref] {
++			continue
++		}
++		s := session
++		name := s.Name
++		if name == "" {
++			name = s.Ref.Key()
++		}
++		status := StatusRunning
++		if s.Action == native.Resume || s.Action == native.Unavailable {
++			status = StatusExited
++		}
++		text := s.Status
++		if s.WaitingFor != "" {
++			text = s.WaitingFor
++		}
++		if s.Reason != "" {
++			text = s.Reason
++		}
++		merged = append(merged, Info{ID: ID("native:" + s.Ref.Key()), Name: name, CWD: s.CWD, Command: string(s.Ref.Provider), Agent: string(s.Ref.Provider), Status: status, CreatedAt: s.StartedAt, LatestSeq: -1, Pending: text, external: &s})
++	}
++	out := BuildOverview(merged, options)
++	out.DiscoveryIssues = listing.Issues
++	out.DiscoveryTruncated = listing.Truncated
++	return out
++}
+diff --git a/internal/terminal/persist.go b/internal/terminal/persist.go
+index cbf68c2..b26f9d0 100644
+--- a/internal/terminal/persist.go
++++ b/internal/terminal/persist.go
+@@ -6,6 +6,8 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"time"
++
++	"github.com/2018kguo/ptyd/internal/native"
+ )
+ 
+ // persistedMeta is what we write to disk per terminal: its config, and
+@@ -18,6 +20,7 @@ import (
+ // Path: <persist-dir>/<id>/meta.json (one dir per terminal). Deleting a
+ // terminal through the API removes its directory.
+ type persistedMeta struct {
++	Source  native.Ref        `json:"source,omitzero"`
+ 	ID      ID                `json:"id"`
+ 	Name    string            `json:"name"`
+ 	CWD     string            `json:"cwd"`
+@@ -42,7 +45,8 @@ type persistedMeta struct {
+ 
+ func (meta persistedMeta) config() CreateConfig {
+ 	return CreateConfig{
+-		Name: meta.Name, CWD: meta.CWD, Command: meta.Command, Args: meta.Args, Env: meta.Env,
++		source: meta.Source,
++		Name:   meta.Name, CWD: meta.CWD, Command: meta.Command, Args: meta.Args, Env: meta.Env,
+ 		Tags: meta.Tags, Watches: meta.Watches, Cols: meta.Cols, Rows: meta.Rows,
+ 		Restore: meta.Restore, Agent: meta.Agent,
+ 	}
+@@ -125,6 +129,7 @@ func readExit(dir string) (persistedExit, bool) {
+ // ghostInfo is the Info a ghost presents.
+ func ghostInfo(meta persistedMeta, exit persistedExit) Info {
+ 	return Info{
++		Source:     meta.Source,
+ 		ID:         meta.ID,
+ 		Name:       meta.Name,
+ 		CWD:        meta.CWD,
+diff --git a/internal/terminal/restore.go b/internal/terminal/restore.go
+index 2b7a8cf..f47c040 100644
+--- a/internal/terminal/restore.go
++++ b/internal/terminal/restore.go
+@@ -101,6 +101,9 @@ func (m *Manager) Restore(id ID, policy RestorePolicy) (Info, error) {
+ 	if err != nil {
+ 		return Info{}, fmt.Errorf("read metadata: %w", err)
+ 	}
++	if meta.Source.Provider != "" {
++		return Info{}, fmt.Errorf("import native session %s again to revalidate its worker", meta.Source.Key())
++	}
+ 	cfg := meta.config()
+ 	if policy != "" {
+ 		cfg.Restore = policy
+diff --git a/internal/terminal/types.go b/internal/terminal/types.go
+index 2c932f4..6ce7dc3 100644
+--- a/internal/terminal/types.go
++++ b/internal/terminal/types.go
+@@ -6,6 +6,8 @@ import (
+ 	"time"
+ 	"unicode/utf8"
+ 	"unsafe"
++
++	"github.com/2018kguo/ptyd/internal/native"
+ )
+ 
+ // stripANSI removes the ANSI escape sequences terminals emit:
+@@ -103,6 +105,10 @@ const (
+ // Info is metadata about a terminal session. It deliberately does NOT include
+ // scrollback; fetch that via GET /terminals/{id}/output (Manager.Output).
+ type Info struct {
++	external *native.Session // populated only when projecting native discovery
++	// Source is launch provenance; a CLI can navigate to another conversation.
++	// It never authorizes reuse as an exact native input target.
++	Source       native.Ref `json:"source,omitzero"`
+ 	ID           ID         `json:"id"`
+ 	Name         string     `json:"name"`
+ 	CWD          string     `json:"cwd"`
+@@ -167,6 +173,8 @@ const (
+ 
+ // CreateConfig is the body of POST /terminals.
+ type CreateConfig struct {
++	// source is set only after fresh native discovery, never by POST /terminals.
++	source  native.Ref
+ 	Name    string            `json:"name"`
+ 	CWD     string            `json:"cwd"`
+ 	Command string            `json:"command"` // binary to exec (looked up in PATH); default $SHELL or /bin/sh

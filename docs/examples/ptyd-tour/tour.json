@@ -1,0 +1,294 @@
+{
+  "title": "feat(agents): bring existing Codex and Claude sessions into ptyd",
+  "url": "https://github.com/2018kguo/ptyd/pull/11",
+  "number": 11,
+  "repo": "2018kguo/ptyd",
+  "author": "2018kguo",
+  "base": "main",
+  "head": "feat/import-agent-sessions",
+  "state": "MERGED",
+  "description": "Codex and Claude sessions started in other tabs can now appear beside ptyd terminals in one picker. Run `ptyd status --watch --discover`, select a running native conversation and press Enter to open a ptyd frontend. Detach returns to the picker while the native worker continues.\n\nDiscovery uses each runtime's local authority and exact conversation id. Codex must use its shared local daemon; foreground Claude sessions first need `/bg` in their original tab. Stopped Claude conversations require explicit `--resume`. The original tab stays open, and its terminal scrollback is not transferred.\n\nThe server revalidates the native reference and hosting process generation around import. Incomplete or ambiguous provider listings cannot authorize import. Temporary frontends expire if unclaimed, close on last live detach, and retain natural exit status briefly. A window's launch reference is provenance only; it cannot silently authorize reuse after in-app conversation changes.\n\nValidation: full Go race suite, vet, benchmark harness checks and Linux cross-compilation. CLI regressions cover cancellation, queued input, cold partial discovery, concurrent viewers and frontend exit codes. Optional tests with both installed native CLIs use private profiles and local fake model streams; they preserve the active worker's process generation, conversation id and single model request after detach. The Codex test also closes an owned original test window while the response continues. Two independent read-only reviews found no remaining blockers. No user sessions were imported or stopped.\n",
+  "summary": "Codex and Claude conversations started in other tabs now show up in `ptyd status --discover`, and Enter opens a ptyd terminal on the same running worker. The native daemons stay the owners. ptyd only launches their own client after a fresh listing confirms the conversation, both before and after the launch.",
+  "steps": [],
+  "chapters": [
+    {
+      "title": "A launch is decided from native state alone",
+      "icon": "list-checks",
+      "body": "`native.Plan` turns one observed session into the argv of the agent's own client. Nothing from the HTTP request reaches the command line except the conversation id, which must be a full UUID.",
+      "files": [
+        {
+          "path": "internal/native/session.go",
+          "lines": [
+            [
+              39,
+              46
+            ],
+            [
+              79,
+              118
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Discovery fails closed",
+      "icon": "search",
+      "body": "Both providers are probed in parallel through their own CLIs or daemon socket. Anything incomplete or ambiguous becomes an issue or an `Unavailable` row, never a guess.",
+      "files": [
+        {
+          "path": "internal/native/discover.go",
+          "lines": [
+            [
+              27,
+              41
+            ],
+            [
+              155,
+              191
+            ]
+          ]
+        },
+        {
+          "path": "internal/native/codex.go",
+          "lines": [
+            [
+              121,
+              137
+            ],
+            [
+              185,
+              192
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Import checks the worker before and after the launch",
+      "icon": "shield-check",
+      "body": "`ImportAgent` looks the conversation up, launches the frontend, then looks it up again. If the worker, directory or process identity moved in between, the new frontend is closed and the import is declined.",
+      "files": [
+        {
+          "path": "internal/terminal/import.go",
+          "lines": [
+            [
+              37,
+              78
+            ],
+            [
+              93,
+              134
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Imported terminals do not outlive their viewers",
+      "icon": "timer",
+      "body": "An imported terminal is a view, so it closes when the last viewer detaches or when nobody claims it within a minute. Restart and restore refuse it and ask for a fresh import.",
+      "files": [
+        {
+          "path": "internal/terminal/attach.go",
+          "hunks": [
+            2,
+            3
+          ]
+        },
+        {
+          "path": "internal/terminal/restore.go",
+          "hunks": [
+            0
+          ]
+        },
+        {
+          "path": "internal/terminal/types.go",
+          "hunks": [
+            2
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "file": "internal/native/session.go",
+      "line": 81,
+      "title": "The trust boundary",
+      "body": "Command, directory and Claude job id come from a fresh native observation, never from the request. `POST /terminals` can already run any command, so what this protects is narrower: a terminal that carries a `Source` was built from what the native daemon reported."
+    },
+    {
+      "file": "internal/native/session.go",
+      "line": 94,
+      "title": "Resume is opt-in",
+      "body": "A stopped Claude conversation is listed but refuses import without `--resume`, because resuming starts a new worker and a model request. Decide whether the picker should offer that in one keypress or keep the flag."
+    },
+    {
+      "file": "internal/native/discover.go",
+      "line": 157,
+      "title": "Handoff duplicates block import",
+      "body": "During `/bg`, Claude briefly reports a foreground and a background worker for one conversation. Both rows become `Unavailable` instead of picking the newer one, so a user who refreshes too early sees a disabled row."
+    },
+    {
+      "file": "internal/native/codex.go",
+      "line": 185,
+      "title": "Check: Codex PID is the daemon",
+      "body": "For Codex, `WorkerPID` is the peer of the daemon socket, shared by every thread. The identity check in import therefore proves the daemon did not restart, not that this thread is still the one loaded."
+    },
+    {
+      "file": "internal/terminal/import.go",
+      "line": 60,
+      "title": "No reuse of imported windows",
+      "body": "A running imported window for the same conversation is refused rather than reused. Its `Source` is where it was launched from, and the user may have switched conversations inside it since."
+    },
+    {
+      "file": "internal/terminal/import.go",
+      "line": 100,
+      "title": "The second lookup",
+      "body": "The frontend has already been spawned when this check runs. On a mismatch it is closed at line 126, so confirm that closing a `codex resume --remote` or `claude attach` client never stops the worker it was attached to."
+    },
+    {
+      "file": "internal/terminal/attach.go",
+      "line": 290,
+      "title": "Detach closes the frontend",
+      "body": "When the last viewer detaches, the imported terminal closes and the native worker keeps running. A late `attach` to that id gets an error and has to import again, which is the price of never reusing a stale frontend."
+    },
+    {
+      "file": "internal/terminal/restore.go",
+      "line": 104,
+      "title": "Imports do not survive a daemon restart",
+      "body": "After ptyd restarts, imported terminals stay as ghosts and cannot be restored in place. Users re-import from the picker, which re-runs every check above."
+    }
+  ],
+  "hidden": [
+    {
+      "reason": "Tests",
+      "files": [
+        "**/*_test.go"
+      ]
+    },
+    {
+      "reason": "Docs and README",
+      "files": [
+        "README.md",
+        "docs/**"
+      ]
+    },
+    {
+      "reason": "Picker UI and CLI that render what the server decided",
+      "files": [
+        "cmd/ptyd/**"
+      ]
+    },
+    {
+      "reason": "HTTP handlers and client wrappers for `ImportAgent`",
+      "files": [
+        "internal/api/**",
+        "internal/client/**"
+      ]
+    },
+    {
+      "reason": "Socket peer PID per platform",
+      "files": [
+        "internal/native/peer_*.go"
+      ]
+    },
+    {
+      "reason": "Carrying `Source` through persistence, overview and the manager",
+      "files": [
+        "internal/terminal/**"
+      ]
+    },
+    {
+      "reason": "Dependencies",
+      "files": [
+        "go.mod",
+        "go.sum"
+      ]
+    }
+  ],
+  "skipped": "Adds `github.com/coder/websocket` to talk to the Codex daemon over its Unix socket.",
+  "diagram": {
+    "title": "Before / after",
+    "caption": "How a running Codex or Claude conversation reaches a ptyd terminal",
+    "nodes": [
+      {
+        "id": "status",
+        "label": "ptyd status",
+        "change": "changed",
+        "icon": "terminal"
+      },
+      {
+        "id": "disc",
+        "label": "Discoverer",
+        "change": "new",
+        "chapter": 2,
+        "icon": "search"
+      },
+      {
+        "id": "native",
+        "label": "Codex / Claude CLIs",
+        "icon": "bot"
+      },
+      {
+        "id": "import",
+        "label": "ImportAgent",
+        "change": "new",
+        "chapter": 3,
+        "icon": "shield-check"
+      },
+      {
+        "id": "plan",
+        "label": "native.Plan",
+        "change": "new",
+        "chapter": 1,
+        "icon": "list-checks"
+      },
+      {
+        "id": "front",
+        "label": "Frontend terminal",
+        "change": "new",
+        "chapter": 4,
+        "icon": "square-terminal"
+      },
+      {
+        "id": "worker",
+        "label": "Native worker",
+        "icon": "cpu"
+      }
+    ],
+    "edges": [
+      {
+        "from": "status",
+        "to": "disc",
+        "label": "list"
+      },
+      {
+        "from": "disc",
+        "to": "native",
+        "label": "query"
+      },
+      {
+        "from": "status",
+        "to": "import",
+        "label": "Enter"
+      },
+      {
+        "from": "import",
+        "to": "plan",
+        "label": "argv"
+      },
+      {
+        "from": "import",
+        "to": "front",
+        "label": "spawn"
+      },
+      {
+        "from": "front",
+        "to": "worker",
+        "label": "attach"
+      }
+    ]
+  }
+}

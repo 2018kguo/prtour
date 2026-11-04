@@ -16,6 +16,10 @@ got better.
 
 ![A guided review: chapter with numbered agent notes inline](docs/tour.png)
 
+Live examples, both from the public [ptyd](https://github.com/2018kguo/ptyd) repo:
+a [guided review of PR #11](https://2018kguo.github.io/prtour/examples/ptyd-tour/) and a [recap of its first week](https://2018kguo.github.io/prtour/examples/ptyd-recap/)
+([PDF](https://2018kguo.github.io/prtour/examples/ptyd-recap/recap.pdf)).
+
 One `tour.json` renders four ways:
 
 - **HTML**: one self-contained file. Diffs are pre-rendered with
@@ -110,6 +114,8 @@ The agent:
 
 ## Recaps
 
+![A recap: what got fixed, what is new, what got better](docs/recap.png)
+
 ```sh
 prtour recap --author you,teammate --since 2026-10-27 --until 2026-11-03
 ```
@@ -128,6 +134,8 @@ real measurements with deploys marked, and a few lines of the diff that
 carry the idea. Engineering detail is folded away. `prtour check` holds the
 writing to plain, sourced, newspaper-style prose. The recap renders as HTML,
 a compact PDF, Markdown for Slack or GitHub, or in the terminal.
+
+![A recap section: before and now, why it happened, and a chart of real measurements](docs/recap-section.png)
 
 ## Design
 

@@ -82,6 +82,7 @@ export function resolveRecap(rc) {
     if (stripCode(text).length > max) warnings.push(`writing, ${where}: ${stripCode(text).length} chars (max ${max}); say less`);
   }
   for (const w of ws) {
+    if (!w.items.length) warnings.push(`"${w.name}": no PRs; list them in "prs"`);
     if (w.kind === 'feature' && !w.demo) warnings.push(`"${w.name}": a feature needs "demo": how to show it, in 1 to 4 steps`);
     if (w.kind !== 'feature' && !w.symptom) warnings.push(`"${w.name}": no symptom. Say what a user or engineer actually saw before, in plain words`);
     const visuals = [w.timeline, w.chart, w.diagram, w.mermaid, w.steps, w.compare, ...(w.images ?? [])].filter(Boolean).length;
@@ -106,9 +107,12 @@ const dayKeys = (r) => {
 
 // "#123" in prose becomes a quiet link to the PR.
 const prUrl = (rc, n) => (rc.repo ? `https://github.com/${esc(rc.repo)}/pull/${n}` : `#pr-${n}`);
-const prLinks = (html, rc) => html.replace(/(^|[^\w/&])#(\d{3,6})\b/g, (_, pre, n) => `${pre}<a class="pr" href="${prUrl(rc, n)}">#${n}</a>`);
+// Short numbers ("#9") link only when they are PRs in this recap, so "#1 cause" stays text.
+const prLinks = (html, rc) => html.replace(/(^|[^\w/&])#(\d{1,6})\b/g, (m, pre, n) => (n.length >= 3 || (rc.prs ?? []).some((p) => p.number === Number(n)) ? `${pre}<a class="pr" href="${prUrl(rc, n)}">#${n}</a>` : m));
 const prose = (text, rc) => prLinks(md(text), rc);
 const inline = (text, rc) => prLinks(md(text).replace(/^<p>|<\/p>$/g, ''), rc);
+// Inline Markdown without PR links, for text that already sits inside a link.
+const plain = (text) => md(text ?? '').replace(/^<p>|<\/p>$/g, '');
 const refs = (rc, prs) => ((prs ?? []).length ? ` <span class="refs">${prs.map((n) => `<a class="pr" href="${prUrl(rc, n)}">#${n}</a>`).join(', ')}</span>` : '');
 
 // ---- visuals ---------------------------------------------------------------
@@ -142,13 +146,13 @@ function chartHTML(c, rc) {
   if (!pts.length) return '';
   const W = 760;
   const H = 260;
-  const L = 44;
+  const L = 76;
   const B = 34;
   const max = c.yMax ?? Math.max(...pts.map((p) => p.y), 1) * 1.1;
   const bw = (W - L - 10) / pts.length;
   const Y = (v) => H - B - (v / max) * (H - B - 16);
   const idx = new Map(pts.map((p, i) => [p.x, i]));
-  const bars = pts.map((p, i) => `<g class="ch-pt" tabindex="0"><rect x="${(L + i * bw + bw * 0.15).toFixed(1)}" y="${Y(p.y).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${(H - B - Y(p.y)).toFixed(1)}" rx="2" class="${p.hi ? 'ch-hi' : ''}"/><rect x="${(L + i * bw).toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H - B}" class="ch-hit"/><title>${esc(p.x)}: ${p.y}${esc(c.unit ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}</title></g>`).join('');
+  const bars = pts.map((p, i) => `<g class="ch-pt" tabindex="0"><rect x="${(L + i * bw + bw * 0.15).toFixed(1)}" y="${Y(p.y).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${(H - B - Y(p.y)).toFixed(1)}" rx="2" class="${p.hi ? 'ch-hi' : ''}"/><rect x="${(L + i * bw).toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H - B}" class="ch-hit"/>${pts.length <= 12 ? `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${(Y(p.y) - 7).toFixed(1)}" text-anchor="middle" class="ch-v">${esc(p.y.toLocaleString('en-US'))}${esc(c.unit ?? '')}</text>` : ''}<title>${esc(p.x)}: ${p.y}${esc(c.unit ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}</title></g>`).join('');
   const every = Math.ceil(pts.length / 8);
   const xl = pts.map((p, i) => (i % every === 0 ? `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="ch-x">${esc(p.label ?? p.x)}</text>` : '')).join('');
   const yt = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - 10}" y1="${Y(max * f / 1.1).toFixed(1)}" y2="${Y(max * f / 1.1).toFixed(1)}" class="ch-grid"/><text x="${L - 8}" y="${(Y(max * f / 1.1) + 4).toFixed(1)}" text-anchor="end" class="ch-x">${Math.round((max * f) / 1.1)}${esc(c.unit ?? '')}</text>`).join('');
@@ -215,7 +219,7 @@ async function section(w, r, state) {
 <h2 class="ws-title">${ic}${esc(w.title ?? w.name)}</h2>
 <p class="ws-meta">${w.items.length} PR${w.items.length === 1 ? '' : 's'}, merged ${spanOf(w.items)}${w.asked ? `. ${rc.askedBy ? `${esc(rc.askedBy)} asked for` : 'Asked for'}: ${esc(w.asked)}` : ''}</p>
 <div class="pair"><div><h3>${beforeLabel}</h3><p class="pair-lead">${inline(w.symptom ?? '', rc)}</p>${w.howBad ? `<p>${inline(w.howBad, rc)}</p>` : ''}</div><div><h3 class="now">${nowLabel}</h3><p class="pair-lead">${inline(w.now ?? w.whyItMatters ?? '', rc)}</p></div></div>
-${w.explain ? `<h3>Why it happened</h3>${prose(w.explain, rc)}` : ''}
+${w.explain ? `<h3>${w.kind === 'feature' ? 'How it works' : 'Why it happened'}</h3>${prose(w.explain, rc)}` : ''}
 ${visuals[0] ?? ''}
 ${wins.length ? `<h3>${w.kind === 'feature' ? 'What it does' : 'What changed'}</h3><ul class="wins">${wins.map((x) => `<li>${inline(x.text, rc)}${refs(rc, x.prs)}</li>`).join('')}</ul>` : ''}
 ${w.demo ? `<h3>Show it</h3><ol class="demo">${[w.demo].flat().map((x) => `<li>${inline(x, rc)}</li>`).join('')}</ol>` : ''}
@@ -224,7 +228,7 @@ ${diffs.filter(Boolean).length ? `<h3>The change, in code</h3>${diffs.join('')}`
 ${w.designCall ? `<h3>The idea that made it work</h3>${prose(w.designCall, rc)}` : ''}
 ${w.triedFirst ? `<h3>What we tried first</h3>${prose(w.triedFirst, rc)}` : ''}
 ${detailItems ? `<details class="more"><summary>Engineering details</summary><div class="more-body">${detailItems}</div></details>` : ''}
-<details class="more prs-more"><summary>All ${w.items.length} PRs</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>
+<details class="more prs-more"><summary>${w.items.length === 1 ? 'The PR' : `All ${w.items.length} PRs`}</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>
 </section>`;
 }
 
@@ -250,7 +254,7 @@ function perDayChart(r) {
 
 function overview(r) {
   const groups = ['fix', 'feature', 'improvement'].map((k) => [k, r.ws.filter((w) => w.kind === k)]).filter(([, l]) => l.length);
-  return groups.map(([k, list]) => `<section class="ov"><h2>${KINDS[k]}</h2><ol class="ov-list">${list.map((w) => `<li><a href="#ws-${w.i + 1}">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : ''}<span><span class="ov-lead">${esc(k === 'fix' ? w.symptom : (w.title ?? w.name))}</span> <span class="ov-now">${esc(w.now ?? '')}</span></span></a></li>`).join('')}</ol></section>`).join('');
+  return groups.map(([k, list]) => `<section class="ov"><h2>${KINDS[k]}</h2><ol class="ov-list">${list.map((w) => `<li><a href="#ws-${w.i + 1}">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : ''}<span><span class="ov-lead">${plain(k === 'fix' ? w.symptom : (w.title ?? w.name))}</span> <span class="ov-now">${plain(w.now)}</span></span></a></li>`).join('')}</ol></section>`).join('');
 }
 
 function tocHTML(r) {
@@ -283,7 +287,7 @@ ${overview(r)}
 <section class="ov"><h2>When it shipped</h2><p>${s.prs} PRs over ${s.days} day${s.days === 1 ? '' : 's'}, colored by workstream.</p>${perDayChart(r)}${notes.length ? `<dl class="daynotes">${notes.map(([d, t]) => `<div><dt>${fmtDay(d, { weekday: 'long' })}</dt><dd>${esc(t)}</dd></div>`).join('')}</dl>` : ''}
 ${lanes ? `<p>Which agent lanes did the work. One row per lane; each dot is a merged PR.</p>${lanes}` : ''}</section>
 ${sections.join('\n')}
-${r.rest.length && rc.otherPrs ? `<section class="ws"><h2 class="ws-title">Everything else</h2><p>${esc(rc.otherPrs)} (${r.rest.length} PRs)</p></section>` : ''}
+${r.rest.length && rc.otherPrs ? `<section class="ws"><h2 class="ws-title">Everything else</h2><p>${inline(rc.otherPrs, rc)} (${r.rest.length} PRs)</p></section>` : ''}
 <section class="appendix">${all}</section>
 <footer class="no-print">Made with <a href="https://github.com/2018kguo/prtour">prtour</a>.</footer>
 </main></div>${sharedTail(state)}${TOGGLE_JS}${CLIENT_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral',fontFamily:'IBM Plex Sans, sans-serif'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
@@ -368,7 +372,7 @@ a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decora
 .tlx[data-view=before] .tl-after,.tlx[data-view=after] .tl-before{display:none}.tl-label{display:none;font-weight:600;margin:8px 0 2px}
 .steps{margin:0;padding-left:22px}.steps li{margin:8px 0}
 .diff-cap{margin:0 0 10px}
-.diff diffs-container{display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.diff{--diffs-font-family:var(--font-mono)}.diff diffs-container{display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .results table,.more table{width:100%;border-collapse:collapse;font-size:15.5px;margin:12px 0}
 .results th,.results td,.more th,.more td{padding:8px 10px 8px 0;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;white-space:normal}
 .results th{font-weight:600}.num{text-align:right!important;font-variant-numeric:tabular-nums}.nowrap{white-space:nowrap}

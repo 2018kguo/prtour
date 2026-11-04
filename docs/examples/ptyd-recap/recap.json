@@ -1,0 +1,1286 @@
+{
+  "kind": "recap",
+  "title": "What shipped in ptyd, Oct 27 to Nov 3",
+  "byline": "2018kguo",
+  "author": "2018kguo",
+  "repo": "2018kguo/ptyd",
+  "since": "2026-10-27",
+  "until": "2026-11-03",
+  "summary": "A ptyd restart lost saved cursors and half-received input, Codex and Claude sessions in other tabs were invisible, and scrolling an attached agent waited a median 16.7 ms for each paint. Over 27 PRs, checkpoints became exact emulator snapshots, terminals moved into persistent groups with a searchable grid of live previews, and the attached view now paints in 0.15 ms.",
+  "dayNotes": {
+    "2026-10-27": "Exact checkpoints and idle compaction.",
+    "2026-10-28": "Session overview, Unicode speedup, Codex and Claude import, home-row keys.",
+    "2026-10-29": "Persistent groups, live previews, the eight-pane grid and faster scrolling.",
+    "2026-11-02": "The line arena and the dock audit."
+  },
+  "workstreams": [
+    {
+      "kind": "fix",
+      "name": "Exact restore",
+      "icon": "rotate-ccw",
+      "title": "Restarted terminals now come back exact, with 7 kinds of lost state checked byte for byte",
+      "symptom": "After a ptyd restart, terminals came back from a replayed ANSI repaint that dropped saved cursors, the inactive screen and half-received escape sequences.",
+      "howBad": "Every version 1 checkpoint was a repaint of up to about 300 KiB, so every restore went through it. A malformed saved screen could also panic ptyd on a later resize (#9).",
+      "now": "Checkpoints store the emulator's exact snapshot, old version 1 files still load, and malformed history is rejected before it replaces the terminal.",
+      "explain": "A terminal emulator holds more than the visible characters. It also has a saved cursor position, a second screen that full-screen apps switch to, and the unfinished tail of an escape sequence still arriving. Repainting the screen as ANSI codes and replaying them keeps only what is visible, so a restored session differed from the one that had been running.",
+      "diagram": {
+        "caption": "What a checkpoint holds, before and after #2",
+        "nodes": [
+          {
+            "id": "emu",
+            "label": "Running emulator",
+            "icon": "terminal"
+          },
+          {
+            "id": "repaint",
+            "label": "ANSI repaint (v1)",
+            "change": "removed"
+          },
+          {
+            "id": "snap",
+            "label": "Exact snapshot (v2)",
+            "change": "new"
+          },
+          {
+            "id": "ckpt",
+            "label": "screen.ckpt",
+            "icon": "hard-drive"
+          },
+          {
+            "id": "fresh",
+            "label": "Restored emulator",
+            "change": "changed"
+          }
+        ],
+        "edges": [
+          {
+            "from": "emu",
+            "to": "repaint",
+            "label": "repaint",
+            "change": "removed"
+          },
+          {
+            "from": "repaint",
+            "to": "ckpt",
+            "change": "removed"
+          },
+          {
+            "from": "emu",
+            "to": "snap",
+            "label": "Snapshot()"
+          },
+          {
+            "from": "snap",
+            "to": "ckpt"
+          },
+          {
+            "from": "ckpt",
+            "to": "fresh",
+            "label": "restore, replay tail"
+          }
+        ]
+      },
+      "wins": [
+        {
+          "text": "7 restore cases now match the original byte for byte after checkpoint, tail replay and resize, from REP and the inactive screen to partial UTF-8, CSI and OSC",
+          "prs": [
+            2
+          ]
+        },
+        {
+          "text": "Version 1 ANSI checkpoints still load, and stay unchanged until the next normal checkpoint replaces them",
+          "prs": [
+            2
+          ]
+        },
+        {
+          "text": "Prompt markers, colors, cursor saves and independent screen modes survive restore with phosphor v0.4.0",
+          "prs": [
+            3
+          ]
+        },
+        {
+          "text": "A saved screen that claims history it never kept is rejected at load instead of panicking during a later resize",
+          "prs": [
+            9
+          ]
+        }
+      ],
+      "diffs": [
+        {
+          "pr": 2,
+          "file": "internal/terminal/checkpoint.go",
+          "lines": [
+            291,
+            297
+          ],
+          "caption": "The checkpoint asks the emulator for its own state instead of a repaint of the screen."
+        },
+        {
+          "pr": 2,
+          "file": "internal/terminal/checkpoint.go",
+          "lines": [
+            397,
+            412
+          ],
+          "caption": "Version 2 files restore through phosphor's snapshot reader with the daemon's own size limits; version 1 files still replay as ANSI."
+        }
+      ],
+      "designCall": "Ask the emulator for its state instead of describing the screen to it. phosphor v0.3.0 added a binary snapshot API, so ptyd writes `Snapshot()`, reads it back with `RestoreSnapshot`, and replays the output tail as before.",
+      "details": [
+        {
+          "title": "Checkpoint format",
+          "body": "New checkpoints are version 2 and need ptyd v0.3.0 or later to read. The reader rejects a header and body that disagree, and keeps the daemon's uint16 geometry limits rather than the library's smaller restore defaults.",
+          "prs": [
+            2
+          ]
+        },
+        {
+          "title": "Prompt and editor state",
+          "body": "phosphor v0.4.0 keeps colors, prompt markers, cursor saves and independent screen modes in the snapshot, and idle shells allocate smaller emulator rows. The outer header stays at version 2, and tests read a checkpoint written by the released library.",
+          "prs": [
+            3
+          ]
+        },
+        {
+          "title": "Malformed saved history",
+          "body": "The fix lives in phosphor's reader, which now validates the structure before a snapshot can replace the terminal. ptyd adopts it with a one-line module bump; the core change carries the exact fuzz regression.",
+          "prs": [
+            9
+          ]
+        }
+      ],
+      "prs": [
+        2,
+        3,
+        9
+      ]
+    },
+    {
+      "kind": "fix",
+      "name": "Preview rendering",
+      "icon": "panels-top-left",
+      "title": "Terminal previews: 2,858 cells of background spill before the fix, zero after",
+      "symptom": "Previews stopped at the cursor, hiding Codex and Claude footers and the bottom of their input boxes, and pane backgrounds leaked into gutters and empty grid slots.",
+      "howBad": "A read-only check of live snapshots found 2,858 cells painted outside their panes before #24.",
+      "now": "Previews keep the last painted row in view, and every cell outside a pane border matches the frame drawn with no previews, for one through eight panes.",
+      "explain": "A preview copies part of a larger terminal into a small box. The old code anchored that box to the cursor, but full-screen apps draw footers below it. The row renderer also fills to the right edge of the physical screen with the current background color, which is right for a full terminal and wrong for a cropped pane.",
+      "wins": [
+        {
+          "text": "2,858 escaped cells in live snapshots before, 0 after",
+          "prs": [
+            24
+          ]
+        },
+        {
+          "text": "A new test compares every cell outside pane borders for one through eight panes, with color on and off, and failed on the old renderer",
+          "prs": [
+            24
+          ]
+        },
+        {
+          "text": "Previews include the last painted row, colored blank cells included, and say how many columns lie outside the pane",
+          "prs": [
+            19
+          ]
+        },
+        {
+          "text": "Cleanup adds a constant number of control bytes per row and keeps the existing preview storage reuse",
+          "prs": [
+            24
+          ]
+        }
+      ],
+      "diffs": [
+        {
+          "pr": 19,
+          "file": "cmd/ptyd/workspace_preview.go",
+          "lines": [
+            49,
+            68
+          ],
+          "caption": "The preview anchors to the last row with anything painted on it, including a colored blank, instead of the cursor."
+        },
+        {
+          "pr": 24,
+          "file": "cmd/ptyd/workspace_preview.go",
+          "lines": [
+            43,
+            51
+          ],
+          "caption": "After each cropped row, reset the style and erase to the end of the line so the next pane starts clean."
+        }
+      ],
+      "designCall": "Treat a preview as a crop with hard edges. The start row comes from what was painted, and every row ends with a reset and an erase, so later panes and the browser chrome paint over a clean background in their existing order.",
+      "details": [
+        {
+          "title": "Footers and input boxes",
+          "body": "Sparse shells still stay near the top of the pane. Observation leaves the source process and its size alone. The same PR added rounded pane frames, colors derived from the viewing terminal and a shortcut bar with room below it.",
+          "prs": [
+            19
+          ]
+        },
+        {
+          "title": "Background spill",
+          "body": "Rows that end at the physical edge keep their final cell. The live check read snapshots without attaching to or changing those terminals.",
+          "prs": [
+            24
+          ]
+        }
+      ],
+      "prs": [
+        19,
+        24
+      ]
+    },
+    {
+      "kind": "feature",
+      "name": "Codex and Claude import",
+      "icon": "bot",
+      "title": "Codex and Claude sessions from other tabs open in ptyd; a live check finds 5 of 5",
+      "symptom": "Codex and Claude conversations started in another terminal tab were invisible to ptyd, so an agent's work lived in two places.",
+      "now": "Pick a running Codex or Claude conversation in ptyd and press Enter. Detaching returns to the list while the native worker keeps running.",
+      "demo": [
+        "Start Codex in another tab, or run `/bg` in a foreground Claude session.",
+        "Run `ptyd ls`, open a group and press `a` to list outside agents.",
+        "Select the conversation and press Enter, then type quick `jk` to return; the worker keeps running.",
+        "Exit the agent and press `R` to relaunch it with its original flags."
+      ],
+      "explain": "Each agent CLI keeps its own record of which conversations are running. ptyd asks that record for an exact conversation id, then checks the worker's process identity before and after it opens a frontend, so a conversation that changed in between is declined instead of attached to the wrong worker.",
+      "diagram": {
+        "caption": "How a conversation from another tab reaches a ptyd frontend",
+        "nodes": [
+          {
+            "id": "group",
+            "label": "ptyd group",
+            "change": "changed"
+          },
+          {
+            "id": "disc",
+            "label": "Discovery",
+            "change": "new"
+          },
+          {
+            "id": "front",
+            "label": "ptyd frontend",
+            "change": "new"
+          },
+          {
+            "id": "native",
+            "label": "Codex or Claude worker",
+            "icon": "bot"
+          }
+        ],
+        "edges": [
+          {
+            "from": "group",
+            "to": "disc",
+            "label": "a"
+          },
+          {
+            "from": "disc",
+            "to": "front",
+            "label": "Enter"
+          },
+          {
+            "from": "front",
+            "to": "native",
+            "label": "attach"
+          }
+        ]
+      },
+      "wins": [
+        {
+          "text": "A live check found 3 Codex and 2 Claude tabs missing from native listings; the read-only probe now finds all 5",
+          "prs": [
+            15
+          ]
+        },
+        {
+          "text": "Import rechecks the conversation id, worker pid and process identity after the frontend starts, and closes the frontend if any changed",
+          "prs": [
+            11
+          ]
+        },
+        {
+          "text": "Codex keeps its composer background: ptyd captures the viewer's colors and answers startup color queries before anyone attaches",
+          "prs": [
+            15
+          ]
+        },
+        {
+          "text": "The launch menu starts Codex and Claude with full access, `f` switches to CLI settings, and `R` relaunches a finished agent",
+          "prs": [
+            20
+          ]
+        }
+      ],
+      "diffs": [
+        {
+          "pr": 11,
+          "file": "internal/terminal/import.go",
+          "lines": [
+            97,
+            128
+          ],
+          "caption": "After the frontend starts, the native record is read again; any change in worker, endpoint or process identity closes the frontend."
+        }
+      ],
+      "designCall": "The agent's own runtime is the only authority. ptyd never guesses a conversation from a window title or process name. An original tab with no exact id is listed with guidance but cannot be imported, and an incomplete or ambiguous listing declines the import.",
+      "details": [
+        {
+          "title": "Discovery and import",
+          "body": "Codex must use its shared local daemon, foreground Claude sessions need `/bg` in their original tab, and stopped Claude conversations need explicit `--resume`. Temporary frontends expire if unclaimed and close on the last live detach.",
+          "prs": [
+            11
+          ]
+        },
+        {
+          "title": "Session controls and original tabs",
+          "body": "Attached views reserve a bottom row for the session name and the `jk` hint, drawn from ptyd's terminal model. A frontend that fails keeps its final error screen until `jk`, including a crash during synchronized output.",
+          "prs": [
+            15
+          ]
+        },
+        {
+          "title": "Launch and relaunch",
+          "body": "Built-in choices carry their own launch flags, custom commands keep their exact shell arguments, and restored agents keep their original flags. Input queued for the old program cannot turn into menu commands.",
+          "prs": [
+            20
+          ]
+        }
+      ],
+      "prs": [
+        11,
+        15,
+        20
+      ]
+    },
+    {
+      "kind": "feature",
+      "name": "Persistent groups",
+      "icon": "folder-tree",
+      "title": "Persistent terminal groups replace the flat picker, and the dock lists every working key",
+      "symptom": "ptyd sessions were a flat list. Seeing which needed attention meant fetching each one, and once finished work piled up the picker was hard to scan.",
+      "now": "Open a named group of terminals with `ptyd new`, `ptyd ls` or `ptyd attach`, preview and take over any of them, and press quick `jk` to go back from any level.",
+      "demo": [
+        "Run `ptyd new website` and launch a few terminals in it.",
+        "Type quick `jk` to leave, then run `ptyd ls` to see the group with a live preview.",
+        "Press Enter to open the group; the dock at the bottom lists every key that works for the selection."
+      ],
+      "explain": "ptyd already kept terminals alive across disconnects. What was missing was a way to see them as one piece of work. A group is a saved record that holds several terminals, so a person or an agent can come back to it later, and a keyboard claim decides whose input reaches a terminal when both are there.",
+      "images": [
+        {
+          "src": "shots/preview.png",
+          "caption": "From the README demo: a group's terminals on the left and a read-only live preview of the selected one."
+        }
+      ],
+      "wins": [
+        {
+          "text": "`ptyd status --json` and `GET /overview` return compact summaries, and default full-history waits allocate 66% fewer bytes in the retained-output fixture",
+          "prs": [
+            6
+          ]
+        },
+        {
+          "text": "Home-row keys: `i` enters a session and quick `jk` returns, while Escape, control and function keys pass through to the app",
+          "prs": [
+            13
+          ]
+        },
+        {
+          "text": "Agents keep their terminal ids and HTTP calls, and new `/groups` routes let an agent put its workers in the same group",
+          "prs": [
+            16
+          ]
+        },
+        {
+          "text": "A person's keyboard claim rejects competing automation input, and read-only observation keeps working",
+          "prs": [
+            16
+          ]
+        },
+        {
+          "text": "A test presses every dock control, and the dock wraps at 40×16, 80×24 and 120×30 instead of dropping keys",
+          "prs": [
+            27
+          ]
+        }
+      ],
+      "diffs": [
+        {
+          "pr": 16,
+          "file": "internal/api/groups.go",
+          "lines": [
+            10,
+            18
+          ],
+          "caption": "The group API an agent sees: groups are a new resource, and terminals keep their existing ids."
+        }
+      ],
+      "designCall": "Make the dock the documentation. #27 removed the `:` palette, `?` help and three key aliases, and every key that works for the current view is labelled with what it will do, such as `a archive` or `a unarchive`.",
+      "details": [
+        {
+          "title": "Session overview",
+          "body": "`ptyd status --watch` opened a live selector with output cursors and match counts. Reclaiming oversized buffers after quiet bursts cut the tested ring's retained heap by about 20% without dropping output.",
+          "prs": [
+            6
+          ]
+        },
+        {
+          "title": "Home-row controls",
+          "body": "The Ctrl-backslash shortcut is gone. Quick literal `jk` is reserved, so pause between the letters or use bracketed paste; key repeats and modified keys never trigger it.",
+          "prs": [
+            13
+          ]
+        },
+        {
+          "title": "Live work first",
+          "body": "The default picker shows live work, groups terminals and agents, and keeps completed screens under `h` without restarting them. New PTYs use the viewer's display settings instead of the daemon's.",
+          "prs": [
+            14
+          ]
+        },
+        {
+          "title": "Groups",
+          "body": "Existing records enter Inbox without restarting, and single-terminal commands moved under `ptyd term`. Rename, move, archive and close-with-confirmation work on groups.",
+          "prs": [
+            16
+          ]
+        },
+        {
+          "title": "Dock audit",
+          "body": "Pressing every advertised key on a real daemon showed `h` and `a` each meant two unlabelled things, and the dock never showed `r`, `m`, `x`, `a` or `h`. Labels now name the action for the current selection.",
+          "prs": [
+            27
+          ]
+        }
+      ],
+      "prs": [
+        6,
+        13,
+        14,
+        16,
+        27
+      ]
+    },
+    {
+      "kind": "feature",
+      "name": "Live grid and search",
+      "icon": "layout-grid",
+      "title": "Up to 8 live terminal previews in one grid, searchable by screen text and scrollback",
+      "symptom": "Checking on several agents meant opening each terminal in turn, and `ptyd ls` printed a table that looked empty.",
+      "now": "Watch up to seven pinned panes plus the selected terminal, and press `/` to find a session by what is on its screen or in its scrollback.",
+      "demo": [
+        "Run `ptyd ls` and move between groups to see each one's live preview.",
+        "Open a group and press `v` on up to seven terminals to pin them.",
+        "Press `/` and type text from any screen to jump to that terminal."
+      ],
+      "explain": "A preview is a read-only copy of a terminal's current screen. ptyd reads one atomic snapshot per terminal and paints only the cells inside its panel, so watching never resizes the program, counts as a viewer or takes the keyboard.",
+      "images": [
+        {
+          "src": "shots/grid.png",
+          "caption": "From the README demo: seven pinned panes and the selected terminal in one group."
+        }
+      ],
+      "wins": [
+        {
+          "text": "Eight-pane frames allocate about 0.60 MB of temporary memory, down from 1.56 MB, with the same output bytes",
+          "prs": [
+            23
+          ]
+        },
+        {
+          "text": "Pins went from 3 to 7 plus the selected terminal, and they persist across browser restarts",
+          "prs": [
+            18,
+            23
+          ]
+        },
+        {
+          "text": "Search reads screens and retained scrollback, and labels combine Codex or Claude with the conversation title",
+          "prs": [
+            23
+          ]
+        },
+        {
+          "text": "A mouse report split right after Escape no longer interrupts Codex or lands in its draft",
+          "prs": [
+            23
+          ]
+        },
+        {
+          "text": "Previews keep colors and Unicode, while `ls --plain`, JSON, pipes and dumb terminals keep plain output",
+          "prs": [
+            17
+          ]
+        }
+      ],
+      "designCall": "Previews use the daemon's existing reads, so the browser and grid are a client-only update that leaves running terminals alone. The screen route gained a binary snapshot format so custom palettes and Unicode modes reach the preview intact.",
+      "details": [
+        {
+          "title": "Group browser",
+          "body": "Moving between groups shows their terminals and a colored preview before entering; smaller windows stack the preview below the list. Empty workspaces explain how to start and where saved Inbox terminals are.",
+          "prs": [
+            17
+          ]
+        },
+        {
+          "title": "Back and pins",
+          "body": "Quick `jk` goes back through menus and prompts too, and late responses cannot take the keyboard after you leave. `:motion` and `PTYD_REDUCED_MOTION=1` turn off the rotating header.",
+          "prs": [
+            18
+          ]
+        },
+        {
+          "title": "Grid, mouse and captain",
+          "body": "Rows, panes and the bottom controls take mouse clicks. Preview scratch storage and HTTP connections are reused, search matches are indexed, and hidden polling pauses during attachment.",
+          "prs": [
+            23
+          ]
+        }
+      ],
+      "prs": [
+        17,
+        18,
+        23
+      ]
+    },
+    {
+      "kind": "improvement",
+      "name": "Attached scrolling",
+      "icon": "mouse",
+      "title": "Scrolling an attached Codex or Claude session: 16.7 ms to paint before, 0.15 ms now",
+      "symptom": "Scrolling Codex or Claude through ptyd felt slower than in a direct terminal.",
+      "howBad": "Each wheel step waited a median 16.7 ms for the next 60 Hz paint tick, and every frame resent 6,162 bytes at 120×30.",
+      "now": "Median wheel-to-paint is 0.15 ms at 120×30 and 0.21 ms at 240×64, against 0.03 to 0.06 ms for a direct PTY.",
+      "explain": "The attached view is a terminal drawn inside your terminal. It repainted on a fixed clock of 60 times a second, so input waited for the next tick, and it resent rows the app had redrawn without changing them. The daemon also batched output for throughput, which held back the redraw that a keypress caused.",
+      "chart": {
+        "title": "Wheel input to completed paint, median, 120×30",
+        "caption": "Medians of six alternating local A/B rounds on an Apple M5 Pro, with real PTYs, TCP and a host emulator. No GUI, GPU or display is measured.",
+        "unit": " ms",
+        "points": [
+          {
+            "x": "before",
+            "label": "Before",
+            "y": 16.7,
+            "note": "60 Hz paint tick"
+          },
+          {
+            "x": "pr21",
+            "label": "After #21",
+            "y": 4.5,
+            "note": "client paints on demand"
+          },
+          {
+            "x": "pr22",
+            "label": "After #22",
+            "y": 0.15,
+            "note": "daemon prioritizes output after input",
+            "hi": true
+          },
+          {
+            "x": "direct",
+            "label": "Direct PTY",
+            "y": 0.03,
+            "note": "control, no ptyd"
+          }
+        ]
+      },
+      "wins": [
+        {
+          "text": "16.7 ms to 4.5 ms median by painting input responses at once and batching background output at 120 Hz",
+          "prs": [
+            21
+          ]
+        },
+        {
+          "text": "4.5 ms to 0.15 to 0.21 ms once the daemon gives output after input a short priority window",
+          "prs": [
+            22
+          ]
+        },
+        {
+          "text": "Bytes per frame: 6,162 to 385 at 120×30, and 21,242 to 729 at 240×64",
+          "prs": [
+            21
+          ]
+        },
+        {
+          "text": "Snapshot setup for 2,000 history rows on a loaded screen: 139 µs to 22.1 µs, with 76% fewer bytes",
+          "prs": [
+            22
+          ]
+        }
+      ],
+      "diffs": [
+        {
+          "pr": 21,
+          "file": "internal/client/attach.go",
+          "lines": [
+            247,
+            261
+          ],
+          "caption": "The first output after idle paints at once; only background output waits for the 120 Hz budget."
+        },
+        {
+          "pr": 22,
+          "file": "internal/terminal/attach.go",
+          "lines": [
+            349,
+            358
+          ],
+          "caption": "In the daemon, any input opens a short window in which its output skips bulk coalescing."
+        }
+      ],
+      "designCall": "Paint on demand instead of on a clock. Rows are compared as exact rendered bytes, so when the app scrolls, ptyd tells the host terminal to scroll and paints only the newly exposed rows.",
+      "details": [
+        {
+          "title": "Client renderer",
+          "body": "Idle panes have no paint timer. Row comparisons cover both scroll directions, styled blanks, links, Unicode, palettes, screen switches, restore, resize and the status row. Parse and render time per frame fell 32 to 38%.",
+          "prs": [
+            21
+          ]
+        },
+        {
+          "title": "Daemon priority and rollout",
+          "body": "A client-only install gives running sessions the new renderer; the daemon change takes effect at its next safe restart. Bulk fanout showed no measured throughput change, and response chunking can add a few allocations per input.",
+          "prs": [
+            22
+          ]
+        }
+      ],
+      "prs": [
+        21,
+        22
+      ]
+    },
+    {
+      "kind": "improvement",
+      "name": "Unicode throughput",
+      "icon": "languages",
+      "title": "Unicode output: mixed graphemes processed 6× faster, CJK text 5× faster",
+      "symptom": "Output full of emoji clusters or CJK text moved through ptyd at about 21 to 23 MB/s, against 366 to 408 MB/s for Claude transcripts and logs.",
+      "howBad": "The emulator allocated about 154 MB for every MiB of mixed Unicode output.",
+      "now": "Mixed graphemes run at 129 MB/s and CJK at 118 MB/s, allocating about 1.25 MB and 1.48 MB per MiB.",
+      "explain": "A grapheme is what a reader sees as one character, such as a flag or a family emoji, even when it is made of several code points. Finding where each one ends is expensive, and the old emulator repeated that work while formatting scrollback.",
+      "timeline": {
+        "caption": "Median time for one pass of each fixture through `consume` on one Go thread at 120×40. PTY reads, HTTP and client delivery are excluded.",
+        "length": 50,
+        "unit": "ms",
+        "rows": [
+          "Mixed graphemes",
+          "CJK text",
+          "Progress bars"
+        ],
+        "before": [
+          {
+            "row": 0,
+            "from": 0,
+            "to": 49.1,
+            "kind": "busy",
+            "label": "Decode clusters, format scrollback"
+          },
+          {
+            "row": 1,
+            "from": 0,
+            "to": 45.1,
+            "kind": "busy",
+            "label": "Decode clusters, format scrollback"
+          },
+          {
+            "row": 2,
+            "from": 0,
+            "to": 0.8,
+            "kind": "busy",
+            "label": "Parse"
+          }
+        ],
+        "after": [
+          {
+            "row": 0,
+            "from": 0,
+            "to": 8.1,
+            "kind": "busy",
+            "label": "Parse"
+          },
+          {
+            "row": 1,
+            "from": 0,
+            "to": 8.9,
+            "kind": "busy",
+            "label": "Parse"
+          },
+          {
+            "row": 2,
+            "from": 0,
+            "to": 0.63,
+            "kind": "busy",
+            "label": "Parse"
+          }
+        ]
+      },
+      "wins": [
+        {
+          "text": "Mixed graphemes: 21.36 to 129.24 MB/s (6.05×)",
+          "prs": [
+            7
+          ]
+        },
+        {
+          "text": "CJK: 23.27 to 118.01 MB/s (5.07×)",
+          "prs": [
+            7
+          ]
+        },
+        {
+          "text": "Progress output: 1,311 to 1,659 MB/s (1.27×)",
+          "prs": [
+            7
+          ]
+        },
+        {
+          "text": "Allocation per MiB of mixed Unicode output: 154 MB to 1.25 MB",
+          "prs": [
+            7
+          ]
+        }
+      ],
+      "designCall": "The speedup lives in phosphor, the emulator library. ptyd adopts the published release and refreshes its build profile from macOS and Linux captures, and the HTTP API and saved terminal format stay the same.",
+      "details": [
+        {
+          "title": "Method",
+          "body": "Five alternating 200 ms samples per build ran identical ptyd code against old and new phosphor source. Claude transcripts and logs moved 1.08× and 1.03×, which needs longer measurements to call.",
+          "prs": [
+            7
+          ],
+          "results": {
+            "columns": [
+              "Input",
+              "Before MB/s",
+              "After MB/s"
+            ],
+            "rows": [
+              [
+                "graphemes",
+                "21.36",
+                "129.24"
+              ],
+              [
+                "cjk",
+                "23.27",
+                "118.01"
+              ],
+              [
+                "progress",
+                "1,311.12",
+                "1,659.20"
+              ],
+              [
+                "claude",
+                "366.21",
+                "394.29"
+              ],
+              [
+                "logs",
+                "407.95",
+                "418.71"
+              ],
+              [
+                "claude-persist",
+                "268.81",
+                "293.62"
+              ]
+            ]
+          }
+        }
+      ],
+      "prs": [
+        7
+      ]
+    },
+    {
+      "kind": "improvement",
+      "name": "Output memory",
+      "icon": "memory-stick",
+      "title": "Allocations per read of Claude output: 6,153 before, 119 now, with 33% fewer bytes",
+      "symptom": "About 95% of the bytes ptyd itself allocated per MiB of output came from the retained-line ring, which made a new string for every line.",
+      "howBad": "Reading the Claude fixture made 6,153 allocations and 1,056.6 KiB of garbage per op, all work for Go's garbage collector.",
+      "now": "Retained lines share an append-only text arena, and idle terminals free unused emulator storage when their checkpoint is due.",
+      "explain": "ptyd keeps recent output lines so agents can fetch new output and search it. Allocating each line on its own means thousands of small objects per read, and each one is work for the garbage collector. An arena is one larger buffer that many lines are written into.",
+      "chart": {
+        "title": "Allocated KiB per benchmark op",
+        "caption": "20 paired, alternating runs per row with `bench/ab.sh` (p=0.000). Whole-`consume` wall time stays within noise because the emulator dominates it.",
+        "unit": " KiB",
+        "points": [
+          {
+            "x": "claude-old",
+            "label": "claude, old",
+            "y": 1056.6
+          },
+          {
+            "x": "claude-new",
+            "label": "claude, new",
+            "y": 708.7,
+            "hi": true
+          },
+          {
+            "x": "logs-old",
+            "label": "logs, old",
+            "y": 1131.1
+          },
+          {
+            "x": "logs-new",
+            "label": "logs, new",
+            "y": 921.8,
+            "hi": true
+          },
+          {
+            "x": "cjk-old",
+            "label": "cjk, old",
+            "y": 1432
+          },
+          {
+            "x": "cjk-new",
+            "label": "cjk, new",
+            "y": 992.8,
+            "hi": true
+          },
+          {
+            "x": "persist-old",
+            "label": "persist, old",
+            "y": 1176.6
+          },
+          {
+            "x": "persist-new",
+            "label": "persist, new",
+            "y": 828.6,
+            "hi": true
+          }
+        ]
+      },
+      "wins": [
+        {
+          "text": "Allocations per op fall 97.8 to 99.7% across the ring and consume benchmarks; Consume/claude goes from 6,153 to 119",
+          "prs": [
+            25
+          ]
+        },
+        {
+          "text": "Allocated bytes fall 18 to 33%, from 1,056.6 KiB to 708.7 KiB on Consume/claude",
+          "prs": [
+            25
+          ]
+        },
+        {
+          "text": "RingWrite is 14% faster, 752.6 µs to 647.9 µs",
+          "prs": [
+            25
+          ]
+        },
+        {
+          "text": "Idle terminals free erased rows and unused hyperlink and combining-character storage on the existing checkpoint timer",
+          "prs": [
+            1
+          ]
+        }
+      ],
+      "diffs": [
+        {
+          "pr": 25,
+          "file": "internal/terminal/ring.go",
+          "lines": [
+            306,
+            327
+          ],
+          "caption": "Short lines are appended to the arena and returned as strings that alias it; long lines keep their own allocation."
+        },
+        {
+          "pr": 1,
+          "file": "internal/terminal/checkpoint.go",
+          "lines": [
+            257,
+            266
+          ],
+          "caption": "Compaction rides the idle checkpoint, after rechecking under the screen lock that output has stayed quiet."
+        }
+      ],
+      "designCall": "Write stripped line text once into a shared buffer and let each line point into it. Bytes below the write position never change, a full arena is replaced rather than reused, and arena sizes are powers of two so they fit the allocator's size classes.",
+      "triedFirst": "Arbitrary arena sizes raised retained heap 31%. Seq-free slots cut retained heap 5.6% but made `Ring.read` 3× slower and search 12% slower, and a flat attacher slice showed no change. All three were reverted.",
+      "details": [
+        {
+          "title": "Line arena",
+          "body": "Attention events clone their text because they outlive ring lines and would otherwise pin an arena. Line caps, byte budgets, snapshots and cursors behave as before, and HTTP readers showed no significant change. Retained heap per typical ring went from 752 KiB to 720 KiB.",
+          "prs": [
+            25
+          ]
+        },
+        {
+          "title": "Idle compaction",
+          "body": "Compaction adds no timer and no per-output work, and keeps screen cells, retained history and unfinished parser input. The quiet check runs again before compaction and before checkpoint I/O.",
+          "prs": [
+            1
+          ]
+        }
+      ],
+      "prs": [
+        1,
+        25
+      ]
+    }
+  ],
+  "otherPrs": "Docs and test-only work: #4, #5 and #10 rewrote the README and guides around what an agent does with ptyd, #8 moved 80 historical benchmark files into a checksummed release bundle and made failed samples stop a comparison, #12 tightened the Codex import witness, and #26 picked up phosphor v0.4.5.",
+  "prs": [
+    {
+      "number": 1,
+      "title": "perf(terminal): release unused emulator storage while idle",
+      "url": "https://github.com/2018kguo/ptyd/pull/1",
+      "author": "2018kguo",
+      "createdAt": "2026-10-27T21:39:39Z",
+      "mergedAt": "2026-10-27T21:43:08Z",
+      "additions": 70,
+      "deletions": 4,
+      "files": 7,
+      "area": "internal",
+      "oneLiner": "Idle terminals free unused emulator storage when their checkpoint is due."
+    },
+    {
+      "number": 2,
+      "title": "feat(persistence): restore exact terminal state after restart",
+      "url": "https://github.com/2018kguo/ptyd/pull/2",
+      "author": "2018kguo",
+      "createdAt": "2026-10-27T23:07:39Z",
+      "mergedAt": "2026-10-27T23:10:32Z",
+      "additions": 229,
+      "deletions": 25,
+      "files": 12,
+      "area": "bench",
+      "oneLiner": "Checkpoints store an exact phosphor snapshot; version 1 files still load."
+    },
+    {
+      "number": 3,
+      "title": "feat(terminal): preserve prompt and editor state",
+      "url": "https://github.com/2018kguo/ptyd/pull/3",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T02:23:58Z",
+      "mergedAt": "2026-10-28T02:27:23Z",
+      "additions": 116,
+      "deletions": 6,
+      "files": 9,
+      "area": "bench",
+      "oneLiner": "Restore keeps prompt markers, colors and screen modes; idle shells use smaller rows."
+    },
+    {
+      "number": 4,
+      "title": "docs: explain when and how to use ptyd",
+      "url": "https://github.com/2018kguo/ptyd/pull/4",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T02:42:32Z",
+      "mergedAt": "2026-10-28T02:51:47Z",
+      "additions": 479,
+      "deletions": 820,
+      "files": 7,
+      "area": "README.md",
+      "oneLiner": "README rewritten around when and how to use ptyd, with new reference and operating guides."
+    },
+    {
+      "number": 5,
+      "title": "docs: explain terminal control for agents",
+      "url": "https://github.com/2018kguo/ptyd/pull/5",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T03:04:02Z",
+      "mergedAt": "2026-10-28T03:05:54Z",
+      "additions": 117,
+      "deletions": 42,
+      "files": 7,
+      "area": "README.md",
+      "oneLiner": "Docs lead with what an agent can do with a session."
+    },
+    {
+      "number": 6,
+      "title": "feat(cli): open a live session overview",
+      "url": "https://github.com/2018kguo/ptyd/pull/6",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T05:17:01Z",
+      "mergedAt": "2026-10-28T05:20:52Z",
+      "additions": 3642,
+      "deletions": 164,
+      "files": 72,
+      "area": "bench",
+      "oneLiner": "`ptyd status --watch` and `GET /overview` show which sessions need attention."
+    },
+    {
+      "number": 7,
+      "title": "perf(terminal): process Unicode output faster",
+      "url": "https://github.com/2018kguo/ptyd/pull/7",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T08:36:44Z",
+      "mergedAt": "2026-10-28T08:43:27Z",
+      "additions": 1706,
+      "deletions": 7,
+      "files": 25,
+      "area": "bench",
+      "oneLiner": "phosphor update makes mixed graphemes 6× and CJK 5× faster through `consume`."
+    },
+    {
+      "number": 8,
+      "title": "fix(bench): keep failed runs out of comparisons",
+      "url": "https://github.com/2018kguo/ptyd/pull/8",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T15:12:57Z",
+      "mergedAt": "2026-10-28T15:40:46Z",
+      "additions": 364,
+      "deletions": 8754,
+      "files": 92,
+      "area": "bench",
+      "oneLiner": "Benchmark history moved to a checksummed bundle; failed samples stop a comparison."
+    },
+    {
+      "number": 9,
+      "title": "fix(terminal): reject malformed saved history safely",
+      "url": "https://github.com/2018kguo/ptyd/pull/9",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T16:19:25Z",
+      "mergedAt": "2026-10-28T16:45:07Z",
+      "additions": 3,
+      "deletions": 3,
+      "files": 2,
+      "area": "go.mod",
+      "oneLiner": "Malformed saved history is rejected at load instead of panicking on resize."
+    },
+    {
+      "number": 10,
+      "title": "docs(readme): explain the purpose and tradeoffs clearly",
+      "url": "https://github.com/2018kguo/ptyd/pull/10",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T17:41:55Z",
+      "mergedAt": "2026-10-28T17:44:21Z",
+      "additions": 19,
+      "deletions": 28,
+      "files": 1,
+      "area": "README.md",
+      "oneLiner": "README intro and navigation tightened."
+    },
+    {
+      "number": 11,
+      "title": "feat(agents): bring existing Codex and Claude sessions into ptyd",
+      "url": "https://github.com/2018kguo/ptyd/pull/11",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T19:15:51Z",
+      "mergedAt": "2026-10-28T19:19:08Z",
+      "additions": 2801,
+      "deletions": 52,
+      "files": 34,
+      "area": "internal",
+      "oneLiner": "Codex and Claude sessions from other tabs can be imported into ptyd."
+    },
+    {
+      "number": 12,
+      "title": "test(agents): verify Codex continues without attached clients",
+      "url": "https://github.com/2018kguo/ptyd/pull/12",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T19:24:18Z",
+      "mergedAt": "2026-10-28T19:27:20Z",
+      "additions": 41,
+      "deletions": 4,
+      "files": 2,
+      "area": "docs",
+      "oneLiner": "Codex import witness checks the worker survives with no client attached."
+    },
+    {
+      "number": 13,
+      "title": "feat(cli): use home-row Vim controls for terminal sessions",
+      "url": "https://github.com/2018kguo/ptyd/pull/13",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T19:56:45Z",
+      "mergedAt": "2026-10-28T20:00:31Z",
+      "additions": 1096,
+      "deletions": 253,
+      "files": 18,
+      "area": "internal",
+      "oneLiner": "Home-row Vim controls: `i` enters a session, quick `jk` returns."
+    },
+    {
+      "number": 14,
+      "title": "feat(ui): make terminal sessions easier to browse",
+      "url": "https://github.com/2018kguo/ptyd/pull/14",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T20:45:49Z",
+      "mergedAt": "2026-10-28T20:47:11Z",
+      "additions": 1201,
+      "deletions": 180,
+      "files": 31,
+      "area": "cmd",
+      "oneLiner": "Picker focuses on live work and keeps app colors and titles."
+    },
+    {
+      "number": 15,
+      "title": "feat(ui): show session controls and original terminal tabs",
+      "url": "https://github.com/2018kguo/ptyd/pull/15",
+      "author": "2018kguo",
+      "createdAt": "2026-10-28T22:00:00Z",
+      "mergedAt": "2026-10-28T22:29:10Z",
+      "additions": 2532,
+      "deletions": 198,
+      "files": 49,
+      "area": "internal",
+      "oneLiner": "Attached views keep a session bar; discovery lists original Codex and Claude tabs."
+    },
+    {
+      "number": 16,
+      "title": "feat(workspaces): group persistent terminals for people and agents",
+      "url": "https://github.com/2018kguo/ptyd/pull/16",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T04:16:21Z",
+      "mergedAt": "2026-10-29T04:20:39Z",
+      "additions": 3949,
+      "deletions": 2114,
+      "files": 50,
+      "area": "cmd",
+      "oneLiner": "Persistent groups of terminals with `ptyd new`, `ptyd ls` and `ptyd attach`."
+    },
+    {
+      "number": 17,
+      "title": "feat(ui): browse groups with live terminal previews",
+      "url": "https://github.com/2018kguo/ptyd/pull/17",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T07:42:06Z",
+      "mergedAt": "2026-10-29T09:31:22Z",
+      "additions": 729,
+      "deletions": 117,
+      "files": 19,
+      "area": "cmd",
+      "oneLiner": "`ptyd ls` opens a group browser with colored live previews."
+    },
+    {
+      "number": 18,
+      "title": "feat(ui): unify back navigation and pin live terminal panes",
+      "url": "https://github.com/2018kguo/ptyd/pull/18",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T17:02:43Z",
+      "mergedAt": "2026-10-29T17:04:24Z",
+      "additions": 1142,
+      "deletions": 144,
+      "files": 24,
+      "area": "cmd",
+      "oneLiner": "Quick `jk` goes back from every level; `v` pins up to three live panes."
+    },
+    {
+      "number": 19,
+      "title": "fix(ui): keep application footers visible in terminal previews",
+      "url": "https://github.com/2018kguo/ptyd/pull/19",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T17:34:39Z",
+      "mergedAt": "2026-10-29T17:43:40Z",
+      "additions": 652,
+      "deletions": 140,
+      "files": 14,
+      "area": "cmd",
+      "oneLiner": "Previews keep app footers in view; rounded frames and softer colors."
+    },
+    {
+      "number": 20,
+      "title": "feat(ui): make agents easier to launch and restart",
+      "url": "https://github.com/2018kguo/ptyd/pull/20",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T18:53:01Z",
+      "mergedAt": "2026-10-29T19:18:58Z",
+      "additions": 580,
+      "deletions": 74,
+      "files": 16,
+      "area": "cmd",
+      "oneLiner": "Agents launch with full access by default; `R` relaunches a finished one."
+    },
+    {
+      "number": 21,
+      "title": "fix(ui): make attached terminal scrolling more responsive",
+      "url": "https://github.com/2018kguo/ptyd/pull/21",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T19:44:13Z",
+      "mergedAt": "2026-10-29T19:46:05Z",
+      "additions": 626,
+      "deletions": 29,
+      "files": 12,
+      "area": "internal",
+      "oneLiner": "Attached scrolling paints on demand and sends only changed rows."
+    },
+    {
+      "number": 22,
+      "title": "feat(ui): polish attached sessions",
+      "url": "https://github.com/2018kguo/ptyd/pull/22",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T20:03:50Z",
+      "mergedAt": "2026-10-29T20:05:46Z",
+      "additions": 481,
+      "deletions": 113,
+      "files": 15,
+      "area": "internal",
+      "oneLiner": "Daemon prioritizes output after input; quieter status bar."
+    },
+    {
+      "number": 23,
+      "title": "feat(ui): add searchable terminal grids",
+      "url": "https://github.com/2018kguo/ptyd/pull/23",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T22:01:42Z",
+      "mergedAt": "2026-10-29T22:03:08Z",
+      "additions": 3294,
+      "deletions": 478,
+      "files": 52,
+      "area": "cmd",
+      "oneLiner": "Searchable grid of up to eight live previews, with mouse support."
+    },
+    {
+      "number": 24,
+      "title": "fix(ui): contain preview backgrounds inside panes",
+      "url": "https://github.com/2018kguo/ptyd/pull/24",
+      "author": "2018kguo",
+      "createdAt": "2026-10-29T22:22:25Z",
+      "mergedAt": "2026-10-29T22:24:41Z",
+      "additions": 79,
+      "deletions": 2,
+      "files": 5,
+      "area": "bench",
+      "oneLiner": "Preview backgrounds stay inside their panes."
+    },
+    {
+      "number": 25,
+      "title": "perf(ring): append retained line text to a shared arena",
+      "url": "https://github.com/2018kguo/ptyd/pull/25",
+      "author": "2018kguo",
+      "createdAt": "2026-11-02T18:41:04Z",
+      "mergedAt": "2026-11-02T18:42:58Z",
+      "additions": 138,
+      "deletions": 1,
+      "files": 5,
+      "area": "internal",
+      "oneLiner": "Retained line text shares one arena, cutting allocations about 98%."
+    },
+    {
+      "number": 26,
+      "title": "deps: phosphor v0.4.5",
+      "url": "https://github.com/2018kguo/ptyd/pull/26",
+      "author": "2018kguo",
+      "createdAt": "2026-11-02T19:00:25Z",
+      "mergedAt": "2026-11-02T19:35:23Z",
+      "additions": 3,
+      "deletions": 3,
+      "files": 2,
+      "area": "go.mod",
+      "oneLiner": "phosphor v0.4.5."
+    },
+    {
+      "number": 27,
+      "title": "feat(ui): show every working control in the dock; cut redundant ones",
+      "url": "https://github.com/2018kguo/ptyd/pull/27",
+      "author": "2018kguo",
+      "createdAt": "2026-11-02T19:52:14Z",
+      "mergedAt": "2026-11-02T19:54:03Z",
+      "additions": 351,
+      "deletions": 235,
+      "files": 13,
+      "area": "cmd",
+      "oneLiner": "Dock lists every working control; redundant keys removed."
+    }
+  ]
+}
