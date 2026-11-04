@@ -115,12 +115,17 @@ function timelineHTML(t, rc) {
   const W = 760;
   const RH = 40;
   const H = t.rows.length * RH + 34;
-  const X = (s) => L + (s / len) * (W - L - 10);
+  const X = (s) => L + (s / len) * (W - L - 16);
   const block = (b) => `<g class="tl-b tl-${esc(b.kind ?? 'busy')}"><rect x="${X(b.from).toFixed(1)}" y="${b.row * RH + 10}" width="${Math.max(2, X(b.to) - X(b.from)).toFixed(1)}" height="${RH - 18}" rx="4"/>${b.label && X(b.to) - X(b.from) > b.label.length * 7 + 10 ? `<text x="${(X(b.from) + 8).toFixed(1)}" y="${b.row * RH + 26}">${esc(b.label)}</text>` : ''}<title>${esc(b.label ?? b.kind ?? '')}: ${b.from}–${b.to} ${esc(t.unit ?? 's')}</title></g>`;
-  const ticks = Array.from({ length: Math.floor(len) + 1 }, (_, i) => i).filter((i) => len <= 12 || i % Math.ceil(len / 12) === 0).map((i) => `<text x="${X(i).toFixed(1)}" y="${H - 6}" class="tl-tick" text-anchor="middle">${i}${i === 0 ? '' : ''}</text>`).join('');
-  const rows = t.rows.map((name, i) => `<text x="0" y="${i * RH + 27}" class="tl-row">${esc(name)}</text><line x1="${L}" x2="${W - 10}" y1="${i * RH + RH - 4}" y2="${i * RH + RH - 4}" class="tl-grid"/>`).join('');
+  // Round tick steps (1, 2, 5 × 10^k), about ten across.
+  const raw = len / 10;
+  const mag = 10 ** Math.floor(Math.log10(raw || 1));
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((x) => x >= raw) ?? mag * 10;
+  const ticks = Array.from({ length: Math.floor(len / step) + 1 }, (_, i) => i * step).map((v) => `<text x="${X(v).toFixed(1)}" y="${H - 6}" class="tl-tick" text-anchor="middle">${v}</text>`).join('');
+  const rows = t.rows.map((name, i) => `<text x="0" y="${i * RH + 27}" class="tl-row">${esc(name)}</text><line x1="${L}" x2="${W - 16}" y1="${i * RH + RH - 4}" y2="${i * RH + RH - 4}" class="tl-grid"/>`).join('');
+  const svg = (view, blocks) => `<div class="tl-view tl-${view}"><p class="tl-label">${view === 'before' ? 'Before' : 'After'}</p><svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}" role="img" aria-label="${esc(`${t.caption ?? 'Timeline'} (${view})`)}">${rows}${(blocks ?? []).map(block).join('')}${ticks}<text x="0" y="${H - 6}" class="tl-tick">${esc(t.unit ?? 'seconds')}</text><line class="tl-head" x1="${L}" x2="${L}" y1="4" y2="${H - 22}"/></svg></div>`;
   return `<figure class="fig tlx" data-view="before"><div class="fig-bar"><div class="seg" role="tablist"><button type="button" data-tlv="before" aria-selected="true">Before</button><button type="button" data-tlv="after" aria-selected="false">After</button></div><button type="button" class="play" data-play>Play</button></div>
-<svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}" role="img" aria-label="${esc(t.caption ?? 'Timeline')}">${rows}<g class="tl-set tl-before">${(t.before ?? []).map(block).join('')}</g><g class="tl-set tl-after">${(t.after ?? []).map(block).join('')}</g>${ticks}<text x="${W - 10}" y="${H - 6}" class="tl-tick" text-anchor="end">${esc(t.unit ?? 'seconds')}</text><line class="tl-head" x1="${L}" x2="${L}" y1="4" y2="${H - 22}"/></svg>
+${svg('before', t.before)}${svg('after', t.after)}
 ${t.caption ? `<figcaption>${inline(t.caption, rc)}</figcaption>` : ''}</figure>`;
 }
 
@@ -140,7 +145,7 @@ function chartHTML(c, rc) {
   const every = Math.ceil(pts.length / 8);
   const xl = pts.map((p, i) => (i % every === 0 ? `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="ch-x">${esc(p.label ?? p.x)}</text>` : '')).join('');
   const yt = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - 10}" y1="${Y(max * f / 1.1).toFixed(1)}" y2="${Y(max * f / 1.1).toFixed(1)}" class="ch-grid"/><text x="${L - 8}" y="${(Y(max * f / 1.1) + 4).toFixed(1)}" text-anchor="end" class="ch-x">${Math.round((max * f) / 1.1)}${esc(c.unit ?? '')}</text>`).join('');
-  const marks = (c.marks ?? []).filter((m) => idx.has(m.x)).map((m) => { const x = L + idx.get(m.x) * bw + bw / 2; return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="10" y2="${H - B}" class="ch-mark"/><text x="${(x + 5).toFixed(1)}" y="20" class="ch-mark-t">${esc(m.label)}</text>`; }).join('');
+  const marks = (c.marks ?? []).filter((m) => idx.has(m.x)).map((m, k) => { const x = L + idx.get(m.x) * bw + bw / 2; const right = x > W - 170; return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="10" y2="${H - B}" class="ch-mark"/><text x="${(x + (right ? -5 : 5)).toFixed(1)}" y="${18 + (k % 3) * 17}" text-anchor="${right ? 'end' : 'start'}" class="ch-mark-t">${esc(m.label)}</text>`; }).join('');
   return `<figure class="fig"><div class="ch-read" aria-live="polite">${esc(c.title ?? '')}</div><svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}" role="img" aria-label="${esc(c.caption ?? c.title ?? 'Chart')}">${yt}${bars}${marks}${xl}</svg>${c.caption ? `<figcaption>${inline(c.caption, rc)}</figcaption>` : ''}</figure>`;
 }
 
@@ -199,12 +204,12 @@ async function section(w, r, state) {
   for (const d of (w.diffs ?? []).slice(0, 2)) diffs.push(await diffSnippet(d, r, state));
   const beforeLabel = w.kind === 'feature' ? 'Before' : w.kind === 'improvement' ? 'Before' : 'What people saw';
   const nowLabel = w.kind === 'feature' ? 'Now you can' : 'Now';
-  const detailItems = [...(w.details ?? w.sections ?? []).map((x) => `<div class="item"><p><b>${esc(x.title)}.</b> ${inline(x.body ?? '', rc)}${refs(rc, x.prs)}</p>${resultsTable(x.results, rc)}</div>`),
-    w.before ? `<div class="item">${prose(w.before, rc)}</div>` : '', resultsTable(w.results, rc), w.proof ? `<div class="item">${prose(w.proof, rc)}</div>` : '',
-    w.trade ? `<div class="item"><p><b>The trade.</b> ${inline(w.trade, rc)}</p></div>` : ''].filter(Boolean).join('');
+  const detailItems = [...(w.details ?? w.sections ?? []).map((x) => `<div class="dt"><p><b>${esc(x.title)}.</b> ${inline(x.body ?? '', rc)}${refs(rc, x.prs)}</p>${resultsTable(x.results, rc)}</div>`),
+    w.before ? `<div class="dt">${prose(w.before, rc)}</div>` : '', resultsTable(w.results, rc), w.proof ? `<div class="dt">${prose(w.proof, rc)}</div>` : '',
+    w.trade ? `<div class="dt"><p><b>The trade.</b> ${inline(w.trade, rc)}</p></div>` : ''].filter(Boolean).join('');
   return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
 <h2 class="ws-title">${ic}${esc(w.title ?? w.name)}</h2>
-<p class="ws-meta">${esc(w.name)} · ${w.items.length} PR${w.items.length === 1 ? '' : 's'}${laneText ? ` · agent lanes: ${laneText}` : ''}</p>
+<p class="ws-meta">${esc(w.name)} · ${w.items.length} PR${w.items.length === 1 ? '' : 's'}${laneText ? ` · agent lanes: ${laneText}` : ''}${w.asked ? `<br>${rc.askedBy ? `What ${esc(rc.askedBy)} asked for` : 'Asked for'}: ${esc(w.asked)}` : ''}</p>
 <div class="pair"><div><h3>${beforeLabel}</h3><p class="pair-lead">${inline(w.symptom ?? '', rc)}</p>${w.howBad ? `<p>${inline(w.howBad, rc)}</p>` : ''}</div><div><h3 class="now">${nowLabel}</h3><p class="pair-lead">${inline(w.now ?? w.whyItMatters ?? '', rc)}</p></div></div>
 ${w.explain ? `<h3>Why it happened</h3>${prose(w.explain, rc)}` : ''}
 ${visuals[0] ?? ''}
@@ -306,8 +311,8 @@ function swimlanes(r) {
 
 const CLIENT_JS = `<script>(()=>{
 document.addEventListener('click',e=>{const v=e.target.closest('[data-tlv]');if(v){const f=v.closest('.tlx');f.dataset.view=v.dataset.tlv;f.querySelectorAll('[data-tlv]').forEach(b=>b.setAttribute('aria-selected',b===v))}
-const p=e.target.closest('[data-play]');if(p){const f=p.closest('.tlx');const h=f.querySelector('.tl-head');const x0=+h.getAttribute('x1'),x1=f.querySelector('svg').viewBox.baseVal.width-10;let t0=null;const dur=4000;cancelAnimationFrame(f._raf);
-const step=ts=>{t0??=ts;const k=Math.min(1,(ts-t0)/dur),x=x0+(x1-x0)*k;h.setAttribute('x1',x);h.setAttribute('x2',x);f.style.setProperty('--px',x);f.querySelectorAll('.tl-b rect').forEach(r=>r.closest('.tl-b').classList.toggle('lit',+r.getAttribute('x')<=x&&+r.getAttribute('x')+ +r.getAttribute('width')>=x));if(k<1)f._raf=requestAnimationFrame(step)};f._raf=requestAnimationFrame(step)}});
+const p=e.target.closest('[data-play]');if(p){const f=p.closest('.tlx');const vw=f.querySelector('.tl-'+f.dataset.view);const h=vw.querySelector('.tl-head');const x0=150,x1=vw.querySelector('svg').viewBox.baseVal.width-16;let t0=null;const dur=4000;cancelAnimationFrame(f._raf);
+const step=ts=>{t0??=ts;const k=Math.min(1,(ts-t0)/dur),x=x0+(x1-x0)*k;h.setAttribute('x1',x);h.setAttribute('x2',x);f.style.setProperty('--px',x);vw.querySelectorAll('.tl-b rect').forEach(r=>r.closest('.tl-b').classList.toggle('lit',+r.getAttribute('x')<=x&&+r.getAttribute('x')+ +r.getAttribute('width')>=x));if(k<1)f._raf=requestAnimationFrame(step)};f._raf=requestAnimationFrame(step)}});
 document.querySelectorAll('.fig').forEach(f=>{const read=f.querySelector('.ch-read');if(!read)return;const base=read.textContent;f.querySelectorAll('.ch-pt').forEach(g=>{const t=g.querySelector('title').textContent;g.addEventListener('mouseenter',()=>read.textContent=t);g.addEventListener('focus',()=>read.textContent=t);g.addEventListener('mouseleave',()=>read.textContent=base)})});
 const ls=[...document.querySelectorAll('[data-toc]')];const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)ls.forEach(l=>l.classList.toggle('on',l.dataset.toc===e.target.id))}),{rootMargin:'-40% 0px -55% 0px'});ls.forEach(l=>{const t=document.getElementById(l.dataset.toc);t&&io.observe(t)})})()</script>`;
 
@@ -356,7 +361,7 @@ a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decora
 .tl-stream rect{fill:var(--add);opacity:.75}.tl-frozen rect{fill:var(--del);opacity:.8}.tl-busy rect{fill:var(--chg);opacity:.8}.tl-wait rect{fill:var(--muted-foreground);opacity:.3}
 .tl-frozen text,.tl-busy text,.tl-stream text{fill:#fff}
 .tl-b.lit rect{opacity:1}.tl-head{stroke:var(--foreground);stroke-width:1.5}
-.tlx[data-view=before] .tl-after,.tlx[data-view=after] .tl-before{display:none}
+.tlx[data-view=before] .tl-after,.tlx[data-view=after] .tl-before{display:none}.tl-label{display:none;font-weight:600;margin:8px 0 2px}
 .steps{margin:0;padding-left:22px}.steps li{margin:8px 0}
 .diff-cap{margin:0 0 10px}
 .diff diffs-container{display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden}
@@ -365,14 +370,14 @@ a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decora
 .results th{font-weight:600}.num{text-align:right!important;font-variant-numeric:tabular-nums}.nowrap{white-space:nowrap}
 .note{color:var(--muted-foreground);font-size:15px}
 .more{margin-top:24px;border-top:1px solid var(--border)}.more>summary{cursor:pointer;padding:14px 0;font-weight:600;list-style:none}.more>summary::after{content:" +";color:var(--muted-foreground)}.more[open]>summary::after{content:" –"}
-.more-body .item{margin:0 0 18px}.more-body .item p{margin:0 0 8px}
+.more-body .dt{margin:0 0 18px}.more-body .dt p{margin:0 0 8px;display:block;-webkit-line-clamp:unset;overflow:visible}
 .prlist{list-style:none;padding:0;margin:0 0 12px}.prlist li{padding:4px 0;font-size:15.5px}
 .table-scroll{overflow-x:auto}
 .daynotes{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin:18px 0 28px}.daynotes dt{font-weight:600}.daynotes dd{margin:0;color:var(--muted-foreground)}
 .appendix{margin-top:80px}footer{margin-top:48px;color:var(--muted-foreground);font-size:15px}
 pre.mermaid{margin:0;font:14px var(--font-mono);color:var(--muted-foreground);white-space:pre-wrap}pre.mermaid[data-processed]{color:inherit;display:flex;justify-content:center}
 @media (max-width:700px){.pair,.daynotes{grid-template-columns:1fr}.hero h1{font-size:32px}}
-@media print{body{font-size:12pt}.part,.ws{break-before:page}.part+.ws{break-before:avoid}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:inline}.fig,.pair,table{break-inside:avoid}}
+@media print{body{font-size:12pt}.part,.ws{break-before:page}.part+.ws{break-before:avoid}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table{break-inside:avoid}}
 `;
 
 export function renderRecapMarkdown(r) {
