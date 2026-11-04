@@ -1,6 +1,6 @@
 ---
 name: prtour
-description: Turn a PR or branch diff into a guided review — chapters in reading order, numbered notes on the lines that matter, and tests/generated/helper noise hidden — rendered as one self-contained HTML file (also Markdown and terminal). Use when asked to open a diff for review, walk someone through a PR, make a big diff reviewable, or produce a review artifact.
+description: Turn a PR, branch diff or stack into a guided review (chapters in reading order, numbered notes on the lines that matter, tests and generated noise hidden), or many merged PRs into a recap of what got fixed, what is new and what got better. Renders one self-contained HTML file, PDF, Markdown or terminal output. Use when asked to review or walk someone through a PR, make a big diff reviewable, or write up what shipped over a span of days.
 ---
 
 # prtour

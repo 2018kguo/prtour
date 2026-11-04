@@ -1,0 +1,13 @@
+{
+  "name": "prtour",
+  "owner": {
+    "name": "Kevin Guo"
+  },
+  "plugins": [
+    {
+      "name": "prtour",
+      "source": "./",
+      "description": "Guided, agent-written PR reviews and recaps: chapters, a before/after map, numbered notes, noise hidden. One self-contained HTML file, PDF, Markdown or terminal."
+    }
+  ]
+}

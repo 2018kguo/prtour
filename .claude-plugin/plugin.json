@@ -1,0 +1,16 @@
+{
+  "name": "prtour",
+  "description": "Guided, agent-written PR reviews and recaps: chapters, a before/after map, numbered notes, noise hidden. One self-contained HTML file, PDF, Markdown or terminal.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Kevin Guo"
+  },
+  "homepage": "https://github.com/2018kguo/prtour",
+  "repository": "https://github.com/2018kguo/prtour",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "pull-request",
+    "recap"
+  ]
+}

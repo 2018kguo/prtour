@@ -1,7 +1,7 @@
 {
   "name": "prtour",
   "version": "0.1.0",
-  "description": "Guided, agent-annotated PR reviews: chapters, numbered notes, noise hidden. One self-contained HTML file, Markdown, or terminal. Diffs by @pierre/diffs.",
+  "description": "Guided, agent-written PR reviews and recaps: chapters, a before/after map, numbered notes, noise hidden. One self-contained HTML file, PDF, Markdown or terminal.",
   "type": "module",
   "bin": {
     "prtour": "bin/prtour.mjs"
@@ -9,7 +9,8 @@
   "files": [
     "bin",
     "src",
-    "SKILL.md",
+    "skills",
+    ".claude-plugin",
     "README.md",
     "LICENSE"
   ],
@@ -25,12 +26,19 @@
     "pull-request",
     "agents",
     "claude",
-    "codex"
+    "codex",
+    "recap",
+    "changelog",
+    "claude-code",
+    "skill"
   ],
   "repository": "github:2018kguo/prtour",
   "license": "MIT",
   "dependencies": {
     "@pierre/diffs": "1.6.2",
     "basecoat-css": "1.1.0"
-  }
+  },
+  "author": "Kevin Guo",
+  "homepage": "https://github.com/2018kguo/prtour",
+  "bugs": "https://github.com/2018kguo/prtour/issues"
 }

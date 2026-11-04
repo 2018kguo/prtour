@@ -402,7 +402,7 @@ async function serve(dir, flags) {
 }
 
 function skill(flags) {
-  const text = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf8');
+  const text = fs.readFileSync(path.join(ROOT, 'skills', 'prtour', 'SKILL.md'), 'utf8');
   if (!flags.install) return process.stdout.write(text);
   const out = typeof flags.install === 'string' ? flags.install : path.join('.claude', 'skills', 'prtour', 'SKILL.md');
   fs.mkdirSync(path.dirname(out), { recursive: true });

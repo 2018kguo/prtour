@@ -1,21 +1,32 @@
-# prtour
+<h1 align="center">prtour</h1>
+<p align="center">Guided PR reviews and recaps, written by your coding agent.</p>
+<p align="center">
+  <a href="#run-it">Get started</a> ·
+  <a href="#with-an-agent">With an agent</a> ·
+  <a href="#recaps">Recaps</a> ·
+  <a href="#commands">Commands</a>
+</p>
 
-Guided PR reviews written by your coding agent. The diff is reordered into
-chapters by idea, with numbered notes on the lines that matter. Tests,
-generated files and helper noise are hidden but still listed. A 2,000-line PR
-becomes the 400 lines a maintainer actually needs to read.
+prtour turns a diff into a guided review. Your agent reorders the diff into
+chapters by idea and puts numbered notes on the lines that matter. Tests,
+generated files and helper noise are hidden but still listed, so a 2,000-line
+PR becomes the 400 lines a maintainer needs to read. Pointed at weeks of
+merged PRs instead, it writes a recap of what got fixed, what is new and what
+got better.
 
 ![A guided review: chapter with numbered agent notes inline](docs/note.png)
 
-One `tour.json` renders three ways:
+One `tour.json` renders four ways:
 
 - **HTML**: one self-contained file. Diffs are pre-rendered with
-  [@pierre/diffs](https://diffs.com) and need no server or network, so the file
-  works as an artifact, an attachment, a static page or a `file://` URL.
+  [@pierre/diffs](https://diffs.com), so the file needs no server and works as
+  an artifact, an attachment, a static page or a `file://` URL.
 - **Markdown**: for a PR comment, Slack or chat.
 - **Terminal**: `prtour show`, colored and paged. Diagrams draw as text, and
   screenshots show inline in kitty, Ghostty, WezTerm and iTerm2.
 - **PDF**: `prtour render --format pdf`, through headless Chrome.
+
+## Run it
 
 Not on npm yet; run it straight from GitHub (`npx -y github:2018kguo/prtour …`)
 or `npm i -g github:2018kguo/prtour` and use `prtour`.
@@ -29,7 +40,21 @@ npx prtour 103 --stack  # the whole stack 103 sits in, found via base/head branc
 
 ## With an agent
 
-The agent instructions ship with the tool:
+**Claude Code**, as a plugin:
+
+```
+/plugin marketplace add 2018kguo/prtour
+/plugin install prtour@prtour
+```
+
+**Any agent with skills** (Claude Code, Codex, Cursor and others), through
+[skills](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add 2018kguo/prtour
+```
+
+**Without installing anything**, the instructions ship with the tool:
 
 ```sh
 npx -y github:2018kguo/prtour skill             # print them (pipe into any agent)
@@ -85,19 +110,31 @@ The agent:
 
 ## Recaps
 
-`prtour recap --author you --since 2026-10-27` gathers every PR you merged in
-that window. The agent groups them into themes by outcome and writes a line
-per PR. The page leads with graphics: a timeline of merges colored by theme,
-a breakdown of where the lines landed, and theme cards with their own
-diagrams and screenshots. It has no diffs. The same recap renders as
-Markdown (with a Mermaid timeline) for Slack or GitHub, as a PDF, and in the
-terminal.
+```sh
+prtour recap --author you,teammate --since 2026-10-27 --until 2026-11-03
+```
+
+This gathers every PR the authors merged in that window into `recap.json`,
+with one context file per PR. A context file holds the description, the
+largest files, and what the person asked the agent that opened the PR. That
+last part is read from local Claude Code and Codex transcripts and never
+leaves your machine; pass `--no-lanes` to skip it.
+
+The agent groups the PRs into workstreams of three kinds: fixes, new
+features worth a demo, and improvements. Each leads with what people lived
+through and how bad it was, explains the cause in plain words, and shows the
+result. The tools are a Before/After timeline with a play button, a chart of
+real measurements with deploys marked, and a few lines of the diff that
+carry the idea. Engineering detail is folded away. `prtour check` holds the
+writing to plain, sourced, newspaper-style prose. The recap renders as HTML,
+a compact PDF, Markdown for Slack or GitHub, or in the terminal.
 
 ## Design
 
 Components come from [Basecoat](https://basecoatui.com), which is shadcn/ui
 in plain HTML and CSS, so pages need no build step and stay one file. Type is
-Geist. Diffs are [@pierre/diffs](https://diffs.com).
+Geist for reviews and IBM Plex for recaps. Icons are [Lucide](https://lucide.dev)
+and [SVGL](https://svgl.app). Diffs are [@pierre/diffs](https://diffs.com).
 
 ## Commands
 
@@ -110,7 +147,7 @@ prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf; -
 prtour show [dir]          terminal view
 prtour open [dir]          live-reload server + reviewer feedback
 prtour feedback [dir]      reviewer comments as Markdown (--clear)
-prtour recap               what shipped across many PRs (--author, --since, --until, --repo)
+prtour recap               what shipped across many PRs (--author, --since, --until, --repo, --no-lanes)
 prtour skill [--install]   agent instructions
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
@@ -119,7 +156,8 @@ target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.pat
 PRs need [`gh`](https://cli.github.com) to be signed in. Ranges and the current
 branch only need `git`. Node 20 or newer.
 
-The `tour.json` schema is in [SKILL.md](./SKILL.md).
+The `tour.json` and `recap.json` schemas are in
+[skills/prtour/SKILL.md](./skills/prtour/SKILL.md).
 
 ## Credits
 
@@ -127,5 +165,7 @@ The idea comes from [@d0xxed's "hide the non-core edits" hunk
 reviews](https://x.com/d0xxed/status/2117672152724083113) and [Capy's Guided
 Reviews](https://x.com/0xluffy/status/2107593041519501477). Diff rendering is
 [@pierre/diffs](https://diffs.com).
+
+## License
 
 MIT
