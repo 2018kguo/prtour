@@ -14,7 +14,7 @@ PR becomes the 400 lines a maintainer needs to read. Pointed at weeks of
 merged PRs instead, it writes a recap of what got fixed, what is new and what
 got better.
 
-![A guided review: chapter with numbered agent notes inline](docs/note.png)
+![A guided review: chapter with numbered agent notes inline](docs/tour.png)
 
 One `tour.json` renders four ways:
 
@@ -91,7 +91,7 @@ The agent:
 
 ## What the page does
 
-![Overview: summary, flow and reading order](docs/overview.png)
+![Overview: summary, flow and reading order](docs/tour-overview.png)
 
 - Overview: the summary, the flow of the change, the reading order of notes,
   and what was left out and why.

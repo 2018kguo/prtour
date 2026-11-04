@@ -110,7 +110,7 @@ export async function renderHTML(r, opts = {}) {
       cards.push(ui.panel(`${loose}${await diffHTML(e.file, e.hunks, ns, o, true)}${rest ? `<div class="rest t-small t-muted"><a href="#files" data-tab="files">${rest} →</a></div>` : ''}`, ` id="${eid(ci, e)}"`));
     }
     chapters.push(`<section class="rail chapter" id="ch-${ci + 1}" data-chapter="${ci + 1}">
-<div class="rail-side stack"><div class="stack" style="gap:6px"><span class="t-label row" style="gap:8px">${c.icon ? iconHTML(r.icons, c.icon) : ''}Chapter ${n2(ci + 1)} of ${n2(N)}</span><h2 class="t-title">${esc(c.title)}</h2></div>
+<div class="rail-side stack"><div class="stack" style="gap:6px"><h2 class="t-title"><span class="ch-n">${ci + 1}</span>${esc(c.title)}</h2></div>
 <div>${md(c.body)}</div>
 <div class="row" style="gap:16px">${ui.check(`data-reviewed="${ci + 1}"`)}${ui.btn('Comment', `data-reply-chapter="${ci + 1}"`)}</div>
 <ul class="flist">${c.entries.map((e) => ui.fileRow(r.label(e.file.path), `#${eid(ci, e)}`, ...entryCounts(e), e.hunks || e.cut ? ` ${ui.badge('part', 'outline')}` : '')).join('')}</ul></div>
@@ -144,13 +144,13 @@ ${ui.tabs([['guide', 'Guide', true], ['files', `Files <span class="t-muted">${s.
 <main class="page">
 <div data-panel="guide">
 <header class="hero stack"><h1 class="t-display">${esc(t.title || 'Guided review')}</h1><div class="row t-small t-muted">${meta}</div></header>
-<section class="${top ? 'split' : 'solo'} intro"><div class="stack">
+<section class="solo intro"><div class="stack">
 <div class="lede">${md(t.summary) || '<p class="t-muted">No summary yet.</p>'}</div>
 ${t.steps?.length ? `<ol class="steps">${t.steps.map((x) => `<li>${unp(md(x))}</li>`).join('')}</ol>` : ''}
 ${r.parts.length ? `<div class="stack" style="gap:6px"><span class="t-label">Stack</span><ul class="flist">${r.parts.map((p) => `<li><a href="${esc(p.url ?? '#')}">${ui.badge(`#${esc(p.key)}`, 'outline')} <span class="f-name">${esc(p.title ?? '')}</span></a><span class="f-count">${counts(p.additions, p.deletions)}</span></li>`).join('')}</ul></div>` : ''}
-<div class="row stats">${ui.stat(s.shown.toLocaleString(), `lines to review, of ${s.total.toLocaleString()}`)}${ui.stat(`${pct}%`, 'of the diff')}${ui.stat(N, N === 1 ? 'chapter' : 'chapters')}${hiddenCount ? ui.stat(hiddenCount, `files left out · <a href="#files" data-tab="files" class="t-muted" style="text-decoration:underline">see all</a>`) : ''}</div>
+<p class="t-muted">${s.shown.toLocaleString()} of ${s.total.toLocaleString()} lines to review (${pct}%), in ${N} chapter${N === 1 ? '' : 's'}.${hiddenCount ? ` ${hiddenCount} file${hiddenCount === 1 ? '' : 's'} left out, <a href="#files" data-tab="files" class="t-muted" style="text-decoration:underline">see all</a>.` : ''}</p>
 ${t.skipped ? `<p class="t-small t-muted">${unp(md(t.skipped))}</p>` : ''}${t.allowLarge ? `<p class="t-small t-muted">Longer than usual: ${esc(t.allowLarge)}</p>` : ''}
-</div>${top ? `<div class="stack">${top}</div>` : ''}</section>
+</div></section>${top ? `<section class="intro-visual stack">${top}</section>` : ''}
 ${chapters.join('\n')}
 <footer class="t-small t-muted no-print">Made with <a href="https://github.com/2018kguo/prtour">prtour</a> · diffs by <a href="https://diffs.com">@pierre/diffs</a></footer>
 </div>
@@ -178,7 +178,7 @@ html{scroll-padding-top:76px}
 .hero{gap:10px;padding:48px 0 24px}
 .intro{margin:12px 0 112px}.solo{max-width:720px}
 .steps{padding-left:20px;margin:0}.steps li{margin:4px 0}
-.stats{gap:32px;padding:16px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.ch-n{color:var(--muted-foreground);font-weight:500;margin-right:.5em;font-variant-numeric:tabular-nums}.intro:has(+.intro-visual){margin-bottom:24px}.intro-visual{margin-bottom:112px}
 .chapter{margin-bottom:112px}
 .chapter:has([data-reviewed]:checked) .t-title{color:var(--muted-foreground)}
 .rest{padding:8px 16px;border-top:1px solid var(--border)}.rest a:hover{color:var(--primary)}

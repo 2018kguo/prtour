@@ -1,0 +1,26 @@
+# Push a tag like v0.1.1 to publish. Uses npm trusted publishing (no token):
+# set it up once at npmjs.com → prtour → Settings → Trusted publishing,
+# repository 2018kguo/prtour, workflow release.yml.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      - run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - run: npm publish --provenance --access public
+      - run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

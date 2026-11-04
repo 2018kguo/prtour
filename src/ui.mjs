@@ -34,7 +34,7 @@ code{font:.85em/1.4 var(--font-mono);background:var(--muted);padding:.12em .4em;
 .stat{display:flex;flex-direction:column}.stat b{font-size:24px;line-height:1.15;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .flist{list-style:none;padding:0;margin:0;font-size:13.5px}.flist li{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 0;border-bottom:1px solid var(--border)}.flist li:last-child{border:0}
 .flist a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.f-name{font-weight:500}.f-dir{color:var(--muted-foreground)}.f-count{white-space:nowrap;font:12px var(--font-mono)}
-.tabbar{position:sticky;top:0;z-index:20;background:color-mix(in oklab,var(--background) 85%,transparent);backdrop-filter:blur(10px)}
+.tabbar{position:sticky;top:0;z-index:20;background:var(--background)}
 .tabbar>div{max-width:1600px;margin:0 auto;padding:12px clamp(16px,5vw,80px);display:flex;gap:12px;align-items:center}
 .meter{height:6px;width:120px;border-radius:3px;background:var(--muted);overflow:hidden}.meter>i{display:block;height:100%;background:var(--add);transition:width .25s}
 details.disclosure{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--card);overflow:hidden}
