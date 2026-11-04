@@ -12,5 +12,6 @@
     "code-review",
     "pull-request",
     "recap"
-  ]
+  ],
+  "icon": "./.claude-plugin/icon.svg"
 }
