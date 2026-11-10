@@ -168,7 +168,7 @@ function media(im) {
   const url = /^https?:/.test(im.src) ? im.src : im.abs && fs.existsSync(im.abs) ? `data:${mime};base64,${fs.readFileSync(im.abs).toString('base64')}` : null;
   return url ? { url, video: /^video/.test(mime ?? '') } : null;
 }
-const figure = (im, rc) => { const m = media(im); return m ? `<figure class="fig">${m.video ? `<video src="${m.url}" controls muted loop playsinline></video>` : `<img src="${m.url}" alt="${esc(im.caption ?? '')}">`}${im.caption ? `<figcaption>${inline(im.caption, rc)}</figcaption>` : ''}</figure>` : ''; };
+const figure = (im, rc) => { const m = media(im); return m ? `<figure class="fig">${m.video ? `<video src="${m.url}" controls muted loop playsinline></video>` : `<img class="zoomable" src="${m.url}" alt="${esc(im.caption ?? '')}">`}${im.caption ? `<figcaption>${inline(im.caption, rc)}</figcaption>` : ''}</figure>` : ''; };
 
 function stepsHTML(st, rc) {
   const items = st?.items ?? [];
@@ -219,7 +219,7 @@ async function section(w, r, state) {
     w.trade ? `<div class="dt"><p><b>The trade.</b> ${inline(w.trade, rc)}</p></div>` : ''].filter(Boolean).join('');
   return `<section class="ws" id="ws-${w.i + 1}" style="--ws:${w.color}">
 <h2 class="ws-title">${ic}${esc(w.title ?? w.name)}</h2>
-<p class="ws-meta">${w.items.length} PR${w.items.length === 1 ? '' : 's'}, merged ${spanOf(w.items)}${w.asked ? `. ${rc.askedBy ? `${esc(rc.askedBy)} asked for` : 'Asked for'}: ${esc(w.asked)}` : ''}</p>
+${w.items.length ? `<p class="ws-meta">${w.items.length} PR${w.items.length === 1 ? '' : 's'}, merged ${spanOf(w.items)}${w.asked ? `. ${rc.askedBy ? `${esc(rc.askedBy)} asked for` : 'Asked for'}: ${esc(w.asked)}` : ''}</p>` : ''}
 <div class="pair"><div><h3>${beforeLabel}</h3><p class="pair-lead">${inline(w.symptom ?? '', rc)}</p>${w.howBad ? `<p>${inline(w.howBad, rc)}</p>` : ''}</div><div><h3 class="now">${nowLabel}</h3><p class="pair-lead">${inline(w.now ?? w.whyItMatters ?? '', rc)}</p></div></div>
 ${w.explain ? `<h3>${w.kind === 'feature' ? 'How it works' : 'Why it happened'}</h3>${prose(w.explain, rc)}` : ''}
 ${visuals[0] ?? ''}
@@ -230,7 +230,7 @@ ${diffs.filter(Boolean).length ? `<h3>The change, in code</h3>${diffs.join('')}`
 ${w.designCall ? `<h3>The idea that made it work</h3>${prose(w.designCall, rc)}` : ''}
 ${w.triedFirst ? `<h3>What we tried first</h3>${prose(w.triedFirst, rc)}` : ''}
 ${detailItems ? `<details class="more"><summary>Engineering details</summary><div class="more-body">${detailItems}</div></details>` : ''}
-<details class="more prs-more"><summary>${w.items.length === 1 ? 'The PR' : `All ${w.items.length} PRs`}</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>
+${w.items.length ? `<details class="more prs-more"><summary>${w.items.length === 1 ? 'The PR' : `All ${w.items.length} PRs`}</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>` : ''}
 </section>`;
 }
 
@@ -262,7 +262,7 @@ function overview(r) {
 function tocHTML(r) {
   const groups = ['fix', 'feature', 'improvement'].map((k) => [k, r.ws.filter((w) => w.kind === k)]).filter(([, l]) => l.length);
   const short = { fix: 'Fixed', feature: 'New', improvement: 'Better' };
-  return `<nav class="toc no-print" aria-label="Sections"><a href="#top" data-toc="top">Overview</a>${groups.map(([k, l]) => `<p class="toc-h">${short[k]}</p>${l.map((w) => `<a href="#ws-${w.i + 1}" data-toc="ws-${w.i + 1}">${esc(w.name)}</a>`).join('')}`).join('')}<a href="#all-prs" data-toc="all-prs" class="toc-gap">All PRs</a></nav>`;
+  return `<nav class="toc no-print" aria-label="Sections"><a href="#top" data-toc="top">Overview</a>${groups.map(([k, l]) => `<p class="toc-h">${short[k]}</p>${l.map((w) => `<a href="#ws-${w.i + 1}" data-toc="ws-${w.i + 1}">${esc(w.name)}</a>`).join('')}`).join('')}${r.prs.length ? '<a href="#all-prs" data-toc="all-prs" class="toc-gap">All PRs</a>' : ''}</nav>`;
 }
 
 export async function renderRecapHTML(r, o = {}) {
@@ -286,13 +286,13 @@ export async function renderRecapHTML(r, o = {}) {
 <style>${CSS}${RECAP_CSS}${TOGGLE_CSS}${ICON_CSS}</style>${THEME}</head><body><div class="shell">${tocHTML(r)}<main class="doc" id="top">
 <header class="hero"><h1>${esc(rc.title || 'What shipped')}</h1><p class="byline">${byline}</p>${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}</header>
 ${overview(r)}
-<section class="ov"><h2>When it shipped</h2><p>${s.prs} PRs over ${s.days} day${s.days === 1 ? '' : 's'}, colored by workstream.</p>${perDayChart(r)}${notes.length ? `<dl class="daynotes">${notes.map(([d, t]) => `<div><dt>${fmtDay(d, { weekday: 'long' })}</dt><dd>${esc(t)}</dd></div>`).join('')}</dl>` : ''}
-${lanes ? `<p>Which agent lanes did the work. One row per lane; each dot is a merged PR.</p>${lanes}` : ''}</section>
+${s.prs ? `<section class="ov"><h2>When it shipped</h2><p>${s.prs} PRs over ${s.days} day${s.days === 1 ? '' : 's'}, colored by workstream.</p>${perDayChart(r)}${notes.length ? `<dl class="daynotes">${notes.map(([d, t]) => `<div><dt>${fmtDay(d, { weekday: 'long' })}</dt><dd>${esc(t)}</dd></div>`).join('')}</dl>` : ''}
+${lanes ? `<p>Which agent lanes did the work. One row per lane; each dot is a merged PR.</p>${lanes}` : ''}</section>` : ''}
 ${sections.join('\n')}
 ${r.rest.length && rc.otherPrs ? `<section class="ws"><h2 class="ws-title">Everything else</h2><p>${inline(rc.otherPrs, rc)} (${r.rest.length} PRs)</p></section>` : ''}
-<section class="appendix">${all}</section>
+${s.prs ? `<section class="appendix">${all}</section>` : ''}
 <footer class="no-print">Made with <a href="https://github.com/2018kguo/prtour">prtour</a>.</footer>
-</main></div>${sharedTail(state)}${TOGGLE_JS}${CLIENT_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral',fontFamily:'IBM Plex Sans, sans-serif'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
+</main></div><div class="zoom no-print" hidden><img alt=""></div><script>{const z=document.querySelector('.zoom'),zi=z.querySelector('img');document.addEventListener('click',(e)=>{const t=e.target;if(t.classList?.contains('zoomable')){zi.src=t.src;zi.alt=t.alt;z.hidden=false;z.scrollTop=0}else if(!z.hidden)z.hidden=true});document.addEventListener('keydown',(e)=>{if(e.key==='Escape')z.hidden=true})}</script>${sharedTail(state)}${TOGGLE_JS}${CLIENT_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral',fontFamily:'IBM Plex Sans, sans-serif'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
   return o.print ? html.replace(/<details class="more"(?! id)/g, '<details class="more" open') : html;
 }
 
@@ -386,6 +386,7 @@ a.pr{color:var(--muted-foreground);font-variant-numeric:tabular-nums;text-decora
 .daynotes{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin:18px 0 28px}.daynotes dt{font-weight:600}.daynotes dd{margin:0;color:var(--muted-foreground)}
 .appendix{margin-top:80px}footer{margin-top:48px;color:var(--muted-foreground);font-size:15px}
 pre.mermaid{margin:0;font:14px var(--font-mono);color:var(--muted-foreground);white-space:pre-wrap}pre.mermaid[data-processed]{color:inherit;display:flex;justify-content:center}
+.zoomable{cursor:zoom-in}.zoom{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.82);overflow:auto;padding:24px;cursor:zoom-out}.zoom img{display:block;margin:0 auto;max-width:min(1440px,100%);height:auto;border-radius:8px}
 @media (max-width:700px){.pair,.daynotes{grid-template-columns:1fr}.hero h1{font-size:32px}}
 @page{margin:12mm 14mm}
 @media print{body{font-size:10pt;line-height:1.45}.doc{max-width:none;padding:0}.ws{padding-top:18px;margin-top:0}.part{break-before:page;margin-top:0}.ws-title{font-size:16pt}h3{font-size:11pt;margin:10px 0 4px}p{margin:4px 0}.fig,.diff-snip{margin:8px 0}h2,h3{break-after:avoid}#all-prs,.prs-more{display:none}.part{break-before:auto!important;margin-top:20px}.dt{margin:4px 0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table{break-inside:avoid}.fig.diff{break-inside:auto}.fig img{max-height:95mm;width:auto;max-width:100%;margin:0 auto}}
