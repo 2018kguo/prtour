@@ -20,6 +20,11 @@
         "workstream": "8 live panes, searchable",
         "headline": "Watch 8 terminals at once and search them by what is on screen",
         "why": "Finding the agent that printed an error no longer means opening tabs one by one."
+      },
+      {
+        "workstream": "Scroll lag 111× lower",
+        "headline": "Scrolling an agent paints in 0.15 ms, down from 16.7 ms",
+        "why": "Scrolling an attached Codex or Claude session now keeps up with a plain terminal."
       }
     ],
     "tldr": [

@@ -59,8 +59,11 @@ assert.deepEqual(resolveRecap({ ...structuredClone(good), order: ['feature'] }).
 const html = fs.readFileSync(run('render', dir).trim(), 'utf8');
 assert.match(html, /<section class="top-stories"[^>]*><article class="story lead"><h2><a href="#ws-1">Notebooks open in 0\.4 s, down from 2\.6 s<\/a><\/h2>/);
 assert.match(html, /<div class="story-grid"><article class="story"><h3><a href="#ws-3">Live cursors/);
-assert.match(html, /<video src="data:video\/mp4;base64,[^"]+" poster="data:image\/jpeg;base64,[^"]+" muted loop playsinline preload="metadata" data-clip/);
-assert.match(html, /<img class="zoomable" src="data:image\/png;base64,iVBOR/);
+assert.match(html, /<video src="data:video\/mp4;base64,[^"]+" data-m-src="m1" poster="data:image\/jpeg;base64,[^"]+" data-m-poster="m2" muted loop playsinline preload="metadata" data-clip/);
+// The screenshot shows in a top story and in its section but is embedded once; the second copy points at the first.
+assert.equal(html.match(/base64,iVBOR/g).length, 1);
+assert.match(html, /<img class="zoomable" src="data:image\/png;base64,iVBOR[^"]+" data-m-src="m3"[\s\S]*<img class="zoomable" data-same-src="m3"/);
+assert.match(html, /data-same-'\+a/);
 assert.match(html, /<h2>Meet the new pieces<\/h2><dl><div id="g-lite-index"><dt>lite-index<\/dt>/);
 assert.equal(html.match(/class="term"/g).length, 1);
 assert.match(html, /<meta property="og:image" content="https:\/\/example\.com\/acme\/2\.0\/media\/clip\.poster\.jpg">/);
@@ -68,8 +71,18 @@ assert.match(html, /<meta name="twitter:card" content="summary_large_image">/);
 assert.match(html, /<meta property="og:description" content="Acme is a notes app that keeps notebooks on your own disk\. Big notebooks open before you reach for the mouse\.">/);
 // The PDF gets the poster frame in place of the clip.
 const print = await renderRecapHTML(resolveRecap(Object.assign(structuredClone(good), { hero: { ...good.hero, stories: [{ ...good.hero.stories[0], media: [{ src: 'media/clip.mp4', caption: 'Opening a notebook.', abs: path.join(dir, 'media/clip.mp4'), posterAbs: path.join(dir, 'media/clip.poster.jpg') }] }] } })), { print: true });
-assert.match(print, /<figure class="fig story-fig"><img src="data:image\/jpeg;base64,[^"]+" alt="Opening a notebook\."><figcaption>Opening a notebook\.<\/figcaption>/);
+assert.match(print, /<figure class="fig story-fig"><img src="data:image\/jpeg;base64,[^"]+" data-m-src="m1" alt="Opening a notebook\."><figcaption>Opening a notebook\.<\/figcaption>/);
 assert.doesNotMatch(print, /<video/);
+
+// A top story with no screenshot or clip shows a compact copy of its section's chart.
+const charted = structuredClone(good);
+charted.workstreams[1].chart = { title: 'Median open time', unit: ' s', points: [{ x: 'before', y: 2.6 }, { x: 'after', y: 0.4 }] };
+charted.hero.stories[0] = { workstream: 'Notebooks open 6× faster' };
+const cr = resolveRecap(charted);
+assert.ok(!cr.warnings.some((w) => w.includes('no visual')), cr.warnings.join('\n'));
+const chtml = await renderRecapHTML(cr);
+assert.match(chtml, /<article class="story lead">.*?<figure class="fig story-fig story-chart"><div class="ch-read"[^>]*>Median open time<\/div><svg class="chart" viewBox="0 0 440 230"/s);
+assert.match(chtml, /<section class="ws" id="ws-1"[\s\S]*<svg class="chart" viewBox="0 0 760 260"/);
 
 // Markdown points at the files.
 const md = run('render', dir, '--format', 'md');

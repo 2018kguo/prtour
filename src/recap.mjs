@@ -137,7 +137,7 @@ export function resolveRecap(rc) {
   if ((rc.hero?.tldr ?? []).length > 4) warnings.push(`hero: ${rc.hero.tldr.length} TL;DR bullets; keep it to 4 at most`);
   for (const s of stories) {
     if (!s.why) warnings.push(`top story "${s.headline}": no "why" (one line on why it matters)`);
-    if (!s.media.length) warnings.push(`top story "${s.headline}": no visual; add "media" (a screenshot or a short clip) to it or its workstream`);
+    if (!s.media.length && !s.ws?.chart?.points?.length && !s.ws?.timeline?.rows?.length) warnings.push(`top story "${s.headline}": no visual; add "media" (a screenshot or a short clip) to it or its workstream, or give the workstream a chart or timeline`);
   }
   for (const w of ws) {
     if (categoryOnly(w.title)) warnings.push(`"${w.name}" headline "${w.title}" only names a category; say what happened (a verb, a number or an outcome word, as in "PDFs open 5x faster")`);
@@ -224,11 +224,12 @@ const refs = (rc, prs) => ((prs ?? []).length ? ` <span class="refs">${prs.map((
 
 // A timeline explainer: rows of activity over a few seconds, Before and After.
 // It shows what one thread doing CPU work means for everyone waiting on it.
-function timelineHTML(t, rc) {
+// `compact` draws it narrower, so its text stays readable inside a top-story card.
+function timelineHTML(t, rc, compact = false) {
   if (!t?.rows?.length) return '';
   const len = t.length ?? Math.max(...[...(t.before ?? []), ...(t.after ?? [])].map((b) => b.to), 1);
   const L = 150;
-  const W = 760;
+  const W = compact ? 520 : 760;
   const RH = 40;
   const H = t.rows.length * RH + 34;
   const X = (s) => L + (s / len) * (W - L - 16);
@@ -246,12 +247,12 @@ ${t.caption ? `<figcaption>${inline(t.caption, rc)}</figcaption>` : ''}</figure>
 }
 
 // Bars (or a line) over time with marks for deploys; hover shows the value.
-function chartHTML(c, rc) {
+function chartHTML(c, rc, compact = false) {
   const pts = c?.points ?? [];
   if (!pts.length) return '';
-  const W = 760;
-  const H = 260;
-  const L = 76;
+  const W = compact ? 440 : 760;
+  const H = compact ? 230 : 260;
+  const L = compact ? 64 : 76;
   const B = 34;
   const max = c.yMax ?? Math.max(...pts.map((p) => p.y), 1) * 1.1;
   const bw = (W - L - 10) / pts.length;
@@ -261,23 +262,38 @@ function chartHTML(c, rc) {
   const every = Math.ceil(pts.length / 8);
   const xl = pts.map((p, i) => (i % every === 0 ? `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="ch-x">${esc(p.label ?? p.x)}</text>` : '')).join('');
   const yt = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - 10}" y1="${Y(max * f / 1.1).toFixed(1)}" y2="${Y(max * f / 1.1).toFixed(1)}" class="ch-grid"/><text x="${L - 8}" y="${(Y(max * f / 1.1) + 4).toFixed(1)}" text-anchor="end" class="ch-x">${Math.round((max * f) / 1.1)}${esc(c.unit ?? '')}</text>`).join('');
-  const marks = (c.marks ?? []).filter((m) => idx.has(m.x)).map((m, k) => { const x = L + idx.get(m.x) * bw + bw / 2; const right = x > W - 170; return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="10" y2="${H - B}" class="ch-mark"/><text x="${(x + (right ? -5 : 5)).toFixed(1)}" y="${18 + (k % 3) * 17}" text-anchor="${right ? 'end' : 'start'}" class="ch-mark-t">${esc(m.label)}</text>`; }).join('');
+  const marks = (c.marks ?? []).filter((m) => idx.has(m.x)).map((m, k) => { const x = L + idx.get(m.x) * bw + bw / 2; const right = x > W - (compact ? 120 : 170); return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="10" y2="${H - B}" class="ch-mark"/><text x="${(x + (right ? -5 : 5)).toFixed(1)}" y="${18 + (k % 3) * 17}" text-anchor="${right ? 'end' : 'start'}" class="ch-mark-t">${esc(m.label)}</text>`; }).join('');
   return `<figure class="fig"><div class="ch-read" aria-live="polite">${esc(c.title ?? '')}</div><svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}" role="img" aria-label="${esc(c.caption ?? c.title ?? 'Chart')}">${yt}${bars}${marks}${xl}</svg>${c.caption ? `<figcaption>${inline(c.caption, rc)}</figcaption>` : ''}</figure>`;
 }
 
 // Screenshots and clips, embedded. A clip plays muted and looped while on screen (click
 // pauses it); with reduced motion it waits for a click. The PDF shows its poster frame.
+// A local file is embedded once. Its first use carries the data URI and `data-m-<attr>`;
+// later uses carry `data-same-<attr>`, and SAME_JS copies the URI over on load (print too).
+function embed(rc, attr, abs, src) {
+  if (/^https?:/.test(src ?? '')) return ` ${attr}="${esc(src)}"`;
+  const ctx = CTX.get(rc);
+  const id = ctx?.media.get(abs);
+  if (id) return ` data-same-${attr}="${id}"`;
+  const url = dataUrl(abs, src);
+  if (!url) return null;
+  if (!ctx) return ` ${attr}="${url}"`;
+  ctx.media.set(abs, `m${ctx.media.size + 1}`);
+  return ` ${attr}="${url}" data-m-${attr}="${ctx.media.get(abs)}"`;
+}
+const SAME_JS = `<script>document.querySelectorAll('[data-same-src],[data-same-poster]').forEach(e=>['src','poster'].forEach(a=>{const id=e.getAttribute('data-same-'+a);if(!id)return;const s=document.querySelector('[data-m-src="'+id+'"]'),p=s?null:document.querySelector('[data-m-poster="'+id+'"]');const u=s?s.getAttribute('src'):p&&p.getAttribute('poster');if(u)e.setAttribute(a,u)}))</script>`;
+
 function figure(im, rc, cls = 'fig') {
-  const remote = /^https?:/.test(im.src);
   const cap = im.caption ? `<figcaption>${inline(im.caption, rc)}</figcaption>` : '';
   if (!isVideo(im.src)) {
-    const url = remote ? im.src : dataUrl(im.abs, im.src);
-    return url ? `<figure class="${cls}"><img class="zoomable" src="${url}" alt="${esc(im.alt ?? im.caption ?? '')}">${cap}</figure>` : '';
+    const src = embed(rc, 'src', im.abs, im.src);
+    return src ? `<figure class="${cls}"><img class="zoomable"${src} alt="${esc(im.alt ?? im.caption ?? '')}">${cap}</figure>` : '';
   }
-  const poster = im.posterAbs ? dataUrl(im.posterAbs) : /^https?:/.test(posterOf(im) ?? '') ? posterOf(im) : null;
-  if (CTX.get(rc)?.print) return poster ? `<figure class="${cls}"><img src="${poster}" alt="${esc(im.caption ?? '')}">${cap}</figure>` : '';
-  const url = remote ? im.src : dataUrl(im.abs, im.src);
-  return url ? `<figure class="${cls}"><video src="${url}"${poster ? ` poster="${poster}"` : ''} muted loop playsinline preload="metadata" data-clip aria-label="${esc(im.caption ?? 'Clip')}"></video>${cap}</figure>` : '';
+  const remote = /^https?:/.test(posterOf(im) ?? '') ? posterOf(im) : null;
+  const poster = (attr) => (im.posterAbs ? embed(rc, attr, im.posterAbs, im.posterAbs) : remote ? ` ${attr}="${esc(remote)}"` : null);
+  if (CTX.get(rc)?.print) { const p = poster('src'); return p ? `<figure class="${cls}"><img${p} alt="${esc(im.caption ?? '')}">${cap}</figure>` : ''; }
+  const src = embed(rc, 'src', im.abs, im.src);
+  return src ? `<figure class="${cls}"><video${src}${poster('poster') ?? ''} muted loop playsinline preload="metadata" data-clip aria-label="${esc(im.caption ?? 'Clip')}"></video>${cap}</figure>` : '';
 }
 
 function stepsHTML(st, rc) {
@@ -378,6 +394,13 @@ function tocHTML(r) {
   return `<nav class="toc no-print" aria-label="Sections"><a href="#top" data-toc="top">Overview</a>${r.glossary.length ? '<a href="#glossary" data-toc="glossary">New pieces</a>' : ''}${groups.map(([k, l]) => `<p class="toc-h">${short[k]}</p>${l.map((w) => `<a href="#ws-${w.i + 1}" data-toc="ws-${w.i + 1}">${esc(w.name)}</a>`).join('')}`).join('')}${r.prs.length ? '<a href="#all-prs" data-toc="all-prs" class="toc-gap">All PRs</a>' : ''}</nav>`;
 }
 
+// A top story's picture: its first media item, or else a compact copy of its section's chart or timeline.
+function storyVisual(st, rc) {
+  if (st.media.length) return figure(st.media[0], rc, 'fig story-fig');
+  const v = st.ws?.chart?.points?.length ? chartHTML(st.ws.chart, rc, true) : timelineHTML(st.ws?.timeline, rc, true);
+  return v.replace('<figure class="fig', '<figure class="fig story-fig story-chart');
+}
+
 // The top stories: a lead story, then the rest in a grid, then the TL;DR.
 function heroHTML(r) {
   const rc = r.rc;
@@ -385,7 +408,7 @@ function heroHTML(r) {
   const story = (st, lead) => {
     const href = st.ws ? `#ws-${st.ws.i + 1}` : null;
     const h = `${href ? `<a href="${href}">` : ''}${esc(st.headline)}${href ? '</a>' : ''}`;
-    return `<article class="${lead ? 'story lead' : 'story'}">${lead ? `<h2>${h}</h2>` : `<h3>${h}</h3>`}${st.why ? `<p class="story-why">${inline(st.why, rc)}</p>` : ''}${st.media.slice(0, 1).map((m) => figure(m, rc, 'fig story-fig')).join('')}</article>`;
+    return `<article class="${lead ? 'story lead' : 'story'}">${lead ? `<h2>${h}</h2>` : `<h3>${h}</h3>`}${st.why ? `<p class="story-why">${inline(st.why, rc)}</p>` : ''}${storyVisual(st, rc)}</article>`;
   };
   const [lead, ...rest] = r.stories;
   const tldr = rc.hero?.tldr ?? [];
@@ -418,7 +441,7 @@ export async function renderRecapHTML(r, o = {}) {
   const rc = r.rc;
   const s = r.stats;
   const state = snippetState();
-  CTX.set(rc, { print: !!o.print, glossary: r.glossary, seen: new Set() });
+  CTX.set(rc, { print: !!o.print, glossary: r.glossary, seen: new Set(), media: new Map() });
   // Built in reading order, so each glossary term links at its first use.
   const head = `${rc.about ? `<p class="about">${inline(rc.about, rc)}</p>` : ''}${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}`;
   const hero = heroHTML(r);
@@ -448,7 +471,7 @@ ${sections.join('\n')}
 ${otherPrs}
 ${s.prs ? `<section class="appendix">${all}</section>` : ''}
 <footer class="no-print">Made with <a href="https://github.com/2018kguo/prtour">prtour</a>.</footer>
-</main></div><div class="zoom no-print" hidden><img alt=""></div><script>{const z=document.querySelector('.zoom'),zi=z.querySelector('img');document.addEventListener('click',(e)=>{const t=e.target;if(t.classList?.contains('zoomable')){zi.src=t.src;zi.alt=t.alt;z.hidden=false;z.scrollTop=0}else if(!z.hidden)z.hidden=true});document.addEventListener('keydown',(e)=>{if(e.key==='Escape')z.hidden=true})}</script>${sharedTail(state)}${TOGGLE_JS}${CLIENT_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral',fontFamily:'IBM Plex Sans, sans-serif'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
+</main></div>${SAME_JS}<div class="zoom no-print" hidden><img alt=""></div><script>{const z=document.querySelector('.zoom'),zi=z.querySelector('img');document.addEventListener('click',(e)=>{const t=e.target;if(t.classList?.contains('zoomable')){zi.src=t.src;zi.alt=t.alt;z.hidden=false;z.scrollTop=0}else if(!z.hidden)z.hidden=true});document.addEventListener('keydown',(e)=>{if(e.key==='Escape')z.hidden=true})}</script>${sharedTail(state)}${TOGGLE_JS}${CLIENT_JS}${anyMermaid ? `<script type="module">try{const{default:m}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');m.initialize({startOnLoad:false,theme:document.documentElement.classList.contains('dark')?'dark':'neutral',fontFamily:'IBM Plex Sans, sans-serif'});await m.run({querySelector:'pre.mermaid'})}catch(e){}</script>` : ''}</body></html>`;
   return o.print ? html.replace(/<details class="more"(?! id)/g, '<details class="more" open') : html;
 }
 
@@ -558,7 +581,7 @@ a.term{color:inherit;text-decoration:underline dotted;text-decoration-color:var(
 @media (max-width:700px){.pair,.daynotes{grid-template-columns:1fr}.hero h1{font-size:32px}.glossary dl>div{grid-template-columns:1fr;gap:4px}}
 @page{margin:12mm 14mm}
 @media print{body{font-size:10pt;line-height:1.45}.doc{max-width:none;padding:0}.ws{padding-top:18px;margin-top:0}.part{break-before:page;margin-top:0}.ws-title{font-size:16pt}h3{font-size:11pt;margin:10px 0 4px}p{margin:4px 0}.fig,.diff-snip{margin:8px 0}h2,h3{break-after:avoid}#all-prs,.prs-more{display:none}.part{break-before:auto!important;margin-top:20px}.dt{margin:4px 0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table,svg.chart,.story,.tldr,.glossary dl>div,.daynotes>div,.diff-cap,diffs-container{break-inside:avoid}.fig img{max-height:95mm;width:auto;max-width:100%;margin:0 auto}
-h1,h2,h3,.ws-meta,.diff-cap,.toc-h{break-after:avoid}h2+*,h3+*,.ws-meta+*{break-before:avoid}.top-stories{margin-top:16px;padding-top:12px}.story h2{font-size:18pt}.story h3{font-size:12pt}.story-why{font-size:10.5pt}.about{font-size:11pt}.story-grid{gap:14px;margin-top:14px}.story-grid .fig img{max-height:45mm}.glossary dl>div{padding:6px 0}.ov{margin-top:24px}a.term{text-decoration:none}}
+h1,h2,h3,.ws-meta,.diff-cap,.toc-h,.ov>p{break-after:avoid}h2+*,h3+*,.ws-meta+*{break-before:avoid}.top-stories{margin-top:16px;padding-top:12px}.story h2{font-size:18pt}.story h3{font-size:12pt}.story-why{font-size:10.5pt}.about{font-size:11pt}.story-grid{gap:14px;margin-top:14px}.story-grid .fig img{max-height:45mm}.glossary dl>div{padding:6px 0}.ov{margin-top:24px}a.term{text-decoration:none}}
 `;
 
 // Media in Markdown: a still inline, a clip as its poster linked to the file. Paths stay relative to the recap.

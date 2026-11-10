@@ -238,7 +238,7 @@ every new name, and keep the engineering detail one click away.
      everything stops being one. Each story's `headline` and `why` default to
      its workstream's `headline` and `now`, and its media to the
      workstream's first `media` item; `why` is one line on why it matters to
-     the reader. Every story needs a visual. `tldr` is 2 to 4 short bullets
+     the reader. Every story needs a visual: its media, or else the card shows a compact copy of its workstream's chart or timeline. `tldr` is 2 to 4 short bullets
      that cover all the top stories.
    - The lead story's kind leads the page (an improvement can come before
      Fixes), and top stories lead their group. `"order": ["feature", "fix",
@@ -300,7 +300,7 @@ machine has (ffmpeg, cwebp or sips). Stills become webp or jpg at most 1600 px
 wide; clips and GIFs become muted H.264 mp4 at most 1280 px wide, plus a
 `<name>.poster.jpg` poster frame. It prints `media` entries to paste; write a
 caption for each that says what the reader is looking at. Keep clips short (5
-to 20 s). The HTML embeds media as data URIs, and `check` warns when the total
+to 20 s). The HTML embeds media as data URIs (a file used in a top story and in its section is embedded once), and `check` warns when the total
 passes 12 MB (`"mediaBudgetMB"` changes the budget) or a clip has no poster.
 In the HTML, clips play muted and looped while on screen, and a click pauses
 them. Markdown links the files, so ship the media folder alongside it.
