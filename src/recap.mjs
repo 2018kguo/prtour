@@ -160,6 +160,9 @@ export function resolveRecap(rc) {
     for (const t of codeTerms(text)) if (!known.has(t.toLowerCase()) && !named.has(t)) named.set(t, where);
   }
   for (const [t, where] of named) suggestions.push(`${where}: "${t}" looks like a code or package name a newcomer won't know; add it to "glossary" ({"term", "what", "why"}) or say it in plain words`);
+  const unnamed = [...new Set(prs.map((p) => p.lane).filter((l) => l && !rc.lanes?.[l]))];
+  if (unnamed.length) suggestions.push(`lanes: ${unnamed.length} lane(s) with no readable name in "lanes" (${unnamed.slice(0, 3).map((l) => `"${l}"`).join(', ')}${unnamed.length > 3 ? '…' : ''}); they show as raw ids`);
+  for (const w of ws) if (crowded(w.chart)) suggestions.push(`"${w.name}" chart: ${w.chart.points.length} bars with labels up to ${Math.max(...w.chart.points.map((p) => String(p.label ?? p.x).length))} characters overlap, so they are drawn at an angle; shorter labels read better`);
   for (const g of glossary) if (!g.what) suggestions.push(`glossary "${g.term}": no "what" (one plain sentence on what it is)`);
   for (const w of ws) {
     if (!w.items.length) warnings.push(`"${w.name}": no PRs; list them in "prs"`);
@@ -167,7 +170,7 @@ export function resolveRecap(rc) {
     if (w.kind !== 'feature' && !w.symptom) warnings.push(`"${w.name}": no symptom. Say what a user or engineer actually saw before, in plain words`);
     if (w.kind !== 'feature' && w.title && !/\d/.test(w.title)) warnings.push(`"${w.name}" title: no number. Write it like a newspaper headline: what changed and by how much`);
     const visuals = [w.timeline, w.chart, w.diagram, w.mermaid, w.steps, w.compare, ...w.media].filter(Boolean).length;
-    if (visuals > 2) warnings.push(`"${w.name}": ${visuals} visuals; keep the one or two that explain the most`);
+    if (visuals > 3) warnings.push(`"${w.name}": ${visuals} visuals; keep the two or three that explain the most`);
     for (const d of w.diffs ?? []) if (d.lines && (d.lines[1] ?? d.lines[0]) - d.lines[0] + 1 > 16) warnings.push(`"${w.name}" diff ${d.file}: ${d.lines[1] - d.lines[0] + 1} lines; show at most 16, the ones that carry the idea`);
     if ((w.diffs ?? []).length > 2) warnings.push(`"${w.name}": ${w.diffs.length} diffs; show at most 2, the ones that carry the idea`);
     warnings.push(...checkDiagram(w.diagram, 0).filter((x) => !x.includes('chapter')).map((x) => `"${w.name}" ${x}`));
@@ -189,8 +192,10 @@ const dayKeys = (r) => {
 
 // "#123" in prose becomes a quiet link to the PR.
 const prUrl = (rc, n) => (rc.repo ? `https://github.com/${esc(rc.repo)}/pull/${n}` : `#pr-${n}`);
+// A PR number as a link, or as plain text when the recap is "private" (a public post about a private repo).
+const prRef = (rc, n, href = prUrl(rc, n)) => (rc.private ? `<span class="pr">#${n}</span>` : `<a class="pr" href="${href}">#${n}</a>`);
 // Short numbers ("#9") link only when they are PRs in this recap, so "#1 cause" stays text.
-const prLinks = (html, rc) => html.replace(/(^|[^\w/&])#(\d{1,6})\b/g, (m, pre, n) => (n.length >= 3 || (rc.prs ?? []).some((p) => p.number === Number(n)) ? `${pre}<a class="pr" href="${prUrl(rc, n)}">#${n}</a>` : m));
+const prLinks = (html, rc) => html.replace(/(^|[^\w/&])#(\d{1,6})\b/g, (m, pre, n) => (n.length >= 3 || (rc.prs ?? []).some((p) => p.number === Number(n)) ? `${pre}${prRef(rc, n)}` : m));
 // Per-render state, keyed by the recap: print mode, and which glossary terms have been linked.
 const CTX = new WeakMap();
 // The first use of each glossary term links to its entry, with the definition on hover.
@@ -228,7 +233,7 @@ const inline = (text, rc) => linkTerms(prLinks(md(text).replace(/^<p>|<\/p>$/g, 
 const plain = (text) => md(text ?? '').replace(/^<p>|<\/p>$/g, '');
 // Text with Markdown and PR numbers stripped, for meta tags and posts.
 const stripMd = (t) => String(t ?? '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\s*\((?:#\d+(?:,\s*)?)+\)/g, '').replace(/\s+/g, ' ').trim();
-const refs = (rc, prs) => ((prs ?? []).length ? ` <span class="refs">${prs.map((n) => `<a class="pr" href="${prUrl(rc, n)}">#${n}</a>`).join(', ')}</span>` : '');
+const refs = (rc, prs) => ((prs ?? []).length ? ` <span class="refs">${prs.map((n) => prRef(rc, n)).join(', ')}</span>` : '');
 
 // ---- visuals ---------------------------------------------------------------
 
@@ -256,21 +261,33 @@ ${svg('before', t.before)}${svg('after', t.after)}
 ${t.caption ? `<figcaption>${inline(t.caption, rc)}</figcaption>` : ''}</figure>`;
 }
 
+// x labels collide when the widest one (about 6.2 px a character at 14 px) is wider than its slot.
+export function crowded(c, W = 760) {
+  const pts = c?.points ?? [];
+  if (!pts.length) return false;
+  const L = W < 760 ? 64 : 76;
+  const every = Math.ceil(pts.length / 8);
+  return Math.max(...pts.map((p) => String(p.label ?? p.x).length)) * 6.2 > ((W - L - 10) / pts.length) * every - 6;
+}
+
 // Bars (or a line) over time with marks for deploys; hover shows the value.
 function chartHTML(c, rc, compact = false) {
   const pts = c?.points ?? [];
   if (!pts.length) return '';
   const W = compact ? 440 : 760;
-  const H = compact ? 230 : 260;
   const L = compact ? 64 : 76;
-  const B = 34;
+  const longest = Math.max(...pts.map((p) => String(p.label ?? p.x).length));
+  const B = crowded(c, W) ? Math.min(140, 30 + longest * 6.2 * 0.58) : 34;
+  const H = (compact ? 230 : 260) + B - 34;
   const max = c.yMax ?? Math.max(...pts.map((p) => p.y), 1) * 1.1;
   const bw = (W - L - 10) / pts.length;
   const Y = (v) => H - B - (v / max) * (H - B - 16);
   const idx = new Map(pts.map((p, i) => [p.x, i]));
   const bars = pts.map((p, i) => `<g class="ch-pt" tabindex="0"><rect x="${(L + i * bw + bw * 0.15).toFixed(1)}" y="${Y(p.y).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${(H - B - Y(p.y)).toFixed(1)}" rx="2" class="${p.hi ? 'ch-hi' : ''}"/><rect x="${(L + i * bw).toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H - B}" class="ch-hit"/>${pts.length <= 12 ? `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${(Y(p.y) - 7).toFixed(1)}" text-anchor="middle" class="ch-v">${esc(p.y.toLocaleString('en-US'))}${esc(c.unit ?? '')}</text>` : ''}<title>${esc(p.x)}: ${p.y}${esc(c.unit ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}</title></g>`).join('');
   const every = Math.ceil(pts.length / 8);
-  const xl = pts.map((p, i) => (i % every === 0 ? `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="ch-x">${esc(p.label ?? p.x)}</text>` : '')).join('');
+  // Labels too wide for their slot are drawn at an angle, with room below for them.
+  const tilt = crowded(c, W);
+  const xl = pts.map((p, i) => (i % every !== 0 ? '' : tilt ? `<text transform="translate(${(L + i * bw + bw / 2).toFixed(1)} ${H - B + 16}) rotate(-35)" text-anchor="end" class="ch-x">${esc(p.label ?? p.x)}</text>` : `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="ch-x">${esc(p.label ?? p.x)}</text>`)).join('');
   const yt = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - 10}" y1="${Y(max * f / 1.1).toFixed(1)}" y2="${Y(max * f / 1.1).toFixed(1)}" class="ch-grid"/><text x="${L - 8}" y="${(Y(max * f / 1.1) + 4).toFixed(1)}" text-anchor="end" class="ch-x">${Math.round((max * f) / 1.1)}${esc(c.unit ?? '')}</text>`).join('');
   const marks = (c.marks ?? []).filter((m) => idx.has(m.x)).map((m, k) => { const x = L + idx.get(m.x) * bw + bw / 2; const right = x > W - (compact ? 120 : 170); return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="10" y2="${H - B}" class="ch-mark"/><text x="${(x + (right ? -5 : 5)).toFixed(1)}" y="${18 + (k % 3) * 17}" text-anchor="${right ? 'end' : 'start'}" class="ch-mark-t">${esc(m.label)}</text>`; }).join('');
   return `<figure class="fig"><div class="ch-read" aria-live="polite">${esc(c.title ?? '')}</div><svg class="chart" viewBox="0 0 ${W} ${H}" style="aspect-ratio:${W}/${H}" role="img" aria-label="${esc(c.caption ?? c.title ?? 'Chart')}">${yt}${bars}${marks}${xl}</svg>${c.caption ? `<figcaption>${inline(c.caption, rc)}</figcaption>` : ''}</figure>`;
@@ -377,7 +394,7 @@ ${diffs.filter(Boolean).length ? `<h3>The change, in code</h3>${diffs.join('')}`
 ${w.designCall ? `<h3>The idea that made it work</h3>${prose(w.designCall, rc)}` : ''}
 ${w.triedFirst ? `<h3>What we tried first</h3>${prose(w.triedFirst, rc)}` : ''}
 ${detailItems ? `<details class="more"><summary>Engineering details</summary><div class="more-body">${detailItems}</div></details>` : ''}
-${w.items.length ? `<details class="more prs-more"><summary>${w.items.length === 1 ? 'The PR' : `All ${w.items.length} PRs`}</summary><ul class="prlist">${w.items.map((p) => `<li><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a> ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>` : ''}
+${w.items.length ? `<details class="more prs-more"><summary>${w.items.length === 1 ? 'The PR' : `All ${w.items.length} PRs`}</summary><ul class="prlist">${w.items.map((p) => `<li>${prRef(rc, p.number, esc(p.url ?? '#'))} ${esc(p.oneLiner || p.title)}</li>`).join('')}</ul></details>` : ''}
 </section>`;
 }
 
@@ -406,7 +423,8 @@ const groupsOf = (r) => [...new Set(r.ws.map((w) => w.kind))].map((k) => [k, r.w
 
 function overview(r) {
   const groups = groupsOf(r);
-  return groups.map(([k, list]) => `<section class="ov"><h2>${KINDS[k]}</h2><ol class="ov-list">${list.map((w) => `<li><a href="#ws-${w.i + 1}">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : ''}<span><span class="ov-lead">${plain(k === 'fix' ? w.symptom : (w.title ?? w.name))}</span> <span class="ov-now">${plain(w.now)}</span></span></a></li>`).join('')}</ol></section>`).join('');
+  const heads = { fix: 'What got fixed', feature: "What's new", improvement: 'What got better' };
+  return groups.map(([k, list]) => `<section class="ov"><h2>${heads[k]}</h2><ol class="ov-list">${list.map((w) => `<li><a href="#ws-${w.i + 1}">${w.icon && r.icons?.has(w.icon) ? iconHTML(r.icons, w.icon) : ''}<span><span class="ov-lead">${plain(k === 'fix' ? w.symptom : (w.title ?? w.name))}</span> <span class="ov-now">${plain(w.now)}</span></span></a></li>`).join('')}</ol></section>`).join('');
 }
 
 function tocHTML(r) {
@@ -470,7 +488,7 @@ export async function renderRecapHTML(r, o = {}) {
   const head = `${rc.about ? `<p class="about">${inline(rc.about, rc)}</p>` : ''}${rc.summary ? `<div class="lede">${prose(rc.summary, rc)}</div>` : ''}`;
   const hero = heroHTML(r);
   const range = rc.since ? `${fmtDay(rc.since)} – ${fmtDay(rc.until ?? day(r.prs.at(-1)?.mergedAt ?? rc.since), { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
-  const byline = [rc.repo, rc.byline ?? rc.author, range].filter(Boolean).map(esc).join(' · ');
+  const byline = [rc.private ? null : rc.repo, rc.byline ?? rc.author, range].filter(Boolean).map(esc).join(' · ');
   const sections = [];
   let last = null;
   for (const w of r.ws) {
@@ -479,7 +497,7 @@ export async function renderRecapHTML(r, o = {}) {
   }
   const notes = Object.entries(rc.dayNotes ?? {}).filter(([d]) => dayKeys(r).includes(d));
   const lanes = swimlanes(r);
-  const all = `<details class="more" id="all-prs"><summary>All ${s.prs} PRs</summary><div class="table-scroll"><table><thead><tr><th>Merged</th><th>PR</th><th>What it did</th><th>Workstream</th></tr></thead><tbody>${r.prs.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<tr id="pr-${p.number}"><td class="nowrap">${fmtDay(day(p.mergedAt))}</td><td><a class="pr" href="${esc(p.url ?? '#')}">#${p.number}</a></td><td>${esc(p.oneLiner || p.title)}</td><td>${w ? esc(w.name) : ''}</td></tr>`; }).join('')}</tbody></table></div></details>`;
+  const all = `<details class="more" id="all-prs"><summary>All ${s.prs} PRs</summary><div class="table-scroll"><table><thead><tr><th>Merged</th><th>PR</th><th>What it did</th><th>Workstream</th></tr></thead><tbody>${r.prs.map((p) => { const w = r.ws[r.wsOf.get(p.number)]; return `<tr id="pr-${p.number}"><td class="nowrap">${fmtDay(day(p.mergedAt))}</td><td>${prRef(rc, p.number, esc(p.url ?? '#'))}</td><td>${esc(p.oneLiner || p.title)}</td><td>${w ? esc(w.name) : ''}</td></tr>`; }).join('')}</tbody></table></div></details>`;
   const anyMermaid = r.ws.some((w) => w.mermaid);
   const otherPrs = r.rest.length && rc.otherPrs ? `<section class="ws"><h2 class="ws-title">Everything else</h2><p>${inline(rc.otherPrs, rc)} (${r.rest.length} PRs)</p></section>` : '';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rc.title || 'What shipped')}</title>${shareMeta(r)}${o.print ? '<meta name="prtour-print" content="1">' : ''}
@@ -605,7 +623,7 @@ a.term{color:inherit;text-decoration:underline dotted;text-decoration-color:var(
 @media (max-width:700px){.pair,.daynotes{grid-template-columns:1fr}.hero h1{font-size:32px}.glossary dl>div{grid-template-columns:1fr;gap:4px}}
 @page{margin:12mm 14mm}
 @media print{body{font-size:10pt;line-height:1.45}.doc{max-width:none;padding:0}.ws{padding-top:18px;margin-top:0}.part{break-before:page;margin-top:0}.ws-title{font-size:16pt}h3{font-size:11pt;margin:10px 0 4px}p{margin:4px 0}.fig,.diff-snip{margin:8px 0}h2,h3{break-after:avoid}#all-prs,.prs-more{display:none}.part{break-before:auto!important;margin-top:20px}.dt{margin:4px 0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after{display:block!important}.tl-label{display:block!important}.fig,.pair,table,svg.chart,.story,.tldr,.glossary dl>div,.daynotes>div,.diff-cap,diffs-container{break-inside:avoid}.fig img{max-height:95mm;width:auto;max-width:100%;margin:0 auto}
-h1,h2,h3,.ws-meta,.diff-cap,.toc-h,.ov>p{break-after:avoid}h2+*,h3+*,.ws-meta+*{break-before:avoid}.top-stories{margin-top:16px;padding-top:12px}.story h2{font-size:18pt}.story h3{font-size:12pt}.story-why{font-size:10.5pt}.about{font-size:11pt}.story-grid{gap:14px;margin-top:14px}.story-grid .fig img{max-height:45mm}.glossary dl>div{padding:6px 0}.ov{margin-top:24px}a.term{text-decoration:none}}
+h1,h2,h3,.ws-meta,.diff-cap,.toc-h,.ov>p{break-after:avoid}h2+*,h3+*,.ws-meta+*{break-before:avoid}.top-stories{margin-top:16px;padding-top:12px}.story h2{font-size:18pt}.story h3{font-size:12pt}.story-why{font-size:10.5pt}.about{font-size:11pt}.story-grid{gap:14px;margin-top:14px}.story-grid .fig img{max-height:45mm}.story.lead{break-inside:auto}.story.lead .fig img{max-height:80mm}.story.lead .story-chart svg{max-height:70mm}.glossary dl>div{padding:6px 0}.ov{margin-top:24px}a.term{text-decoration:none}}
 `;
 
 // Media in Markdown: a still inline, a clip as its poster linked to the file. Paths stay relative to the recap.
@@ -635,7 +653,7 @@ export function renderRecapMarkdown(r) {
       if (w.demo) out.push(`- Show it: ${[w.demo].flat().join(' → ')}`);
       for (const m of w.media) out.push('', mdMedia(m));
       if (w.diagram?.nodes?.length) out.push('', diagramMermaid(w.diagram));
-      if (w.items.length) out.push('', `<details><summary>${w.items.length} PRs</summary>`, '', ...w.items.map((p) => `- [#${p.number}](${p.url}) ${p.oneLiner || p.title}`), '', '</details>');
+      if (w.items.length) out.push('', `<details><summary>${w.items.length} PRs</summary>`, '', ...w.items.map((p) => `- ${rc.private ? `#${p.number}` : `[#${p.number}](${p.url})`} ${p.oneLiner || p.title}`), '', '</details>');
       out.push('');
     }
   }
@@ -663,19 +681,44 @@ function fitPost(t) {
   const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.\n'), cut.lastIndexOf('。'));
   return end > cut.length / 2 ? cut.slice(0, end + 1) : `${cut.replace(/\s+\S*$/, '')}…`;
 }
-export function renderRecapThread(r) {
+// A page holding one workstream's chart or timeline, for a screenshot to attach
+// to a thread post when the story has no screenshot or clip of its own.
+export function chartCardHTML(r, w) {
+  const v = w?.chart?.points?.length ? chartHTML(w.chart, r.rc, true) : timelineHTML(w?.timeline, r.rc, true);
+  if (!v) return null;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>${CSS}${RECAP_CSS}.fig{margin:0}.fig-bar{display:none}.tlx .tl-before,.tlx .tl-after,.tl-label{display:block!important}</style></head><body style="margin:0;padding:24px;width:600px;--ws:${w.color ?? 'var(--foreground)'}">${v}</body></html>`;
+}
+
+// Text that can stand alone in a post (not "They open at once", which needs the line before).
+const standalone = (t) => t && !/^(?:they|it|its|this|these|that|those|now|here|so|and|but|also|which)\b/i.test(stripMd(t));
+
+// o.attach(item) maps a media item to the path to attach; o.chart(workstream)
+// returns a rendered image of its chart, if it can. A post with no picture says so.
+export function renderRecapThread(r, o = {}) {
   const rc = r.rc;
+  const attachOf = o.attach ?? ((m) => m.src);
   const posts = [];
-  let open = [stripMd(rc.title || 'What shipped'), stripMd(rc.about)].filter(Boolean).join('\n\n');
-  const tldr = `${open}\n\n${(rc.hero?.tldr ?? []).map((x) => `- ${stripMd(x)}`).join('\n')}`;
-  if (rc.hero?.tldr?.length && postLength(tldr) <= THREAD_MAX) open = tldr;
-  posts.push({ text: open });
-  const media = (list) => list.slice(0, 1).map((m) => m.src);
-  for (const st of r.stories) posts.push({ text: [stripMd(st.headline), stripMd(st.why)].filter(Boolean).join('\n\n'), attach: media(st.media) });
+  const opener = [stripMd(rc.title || 'What shipped'), stripMd(rc.about)].filter(Boolean).join('\n\n');
+  const bullets = (rc.hero?.tldr ?? []).map((x) => `- ${stripMd(x)}`);
+  // The TL;DR rides in the opener when it fits; otherwise it follows in as many posts as it needs.
+  if (bullets.length && postLength(`${opener}\n\n${bullets.join('\n')}`) <= THREAD_MAX) posts.push({ text: `${opener}\n\n${bullets.join('\n')}` });
+  else {
+    posts.push({ text: opener });
+    for (const b of bullets) {
+      const last = posts.at(-1);
+      if (last.tldr && postLength(`${last.text}\n${b}`) <= THREAD_MAX) last.text += `\n${b}`;
+      else posts.push({ text: `TL;DR\n${b}`, tldr: true });
+    }
+  }
+  const picture = (media, w) => { if (media.length) return { attach: [attachOf(media[0])] }; const c = w && o.chart?.(w); return c ? { attach: [c] } : { none: true }; };
+  for (const st of r.stories) posts.push({ text: [stripMd(st.headline), stripMd(st.why)].filter(Boolean).join('\n\n'), ...picture(st.media, st.ws) });
   const told = new Set(r.stories.map((x) => x.ws).filter(Boolean));
-  for (const w of r.ws.filter((x) => !told.has(x)).slice(0, Math.max(0, 7 - posts.length))) posts.push({ text: [stripMd(w.title), stripMd(w.now)].filter(Boolean).join('\n\n'), attach: media(w.media) });
+  for (const w of r.ws.filter((x) => !told.has(x)).slice(0, Math.max(0, 7 - posts.length))) {
+    const line = [w.now, ...(w.wins ?? []).map((x) => (typeof x === 'string' ? x : x.text))].find(standalone);
+    posts.push({ text: [stripMd(w.title), stripMd(line)].filter(Boolean).join('\n\n'), ...picture(w.media, w) });
+  }
   posts.push({ text: `The full write-up, with the numbers behind each change:\n${absUrl(rc.url) ?? '<link to the page>'}` });
-  return `${posts.map((p, i) => { const text = fitPost(p.text); return [`${i + 1}/${posts.length} (${postLength(text)} chars)`, text, ...(p.attach ?? []).map((a) => `[attach ${a}]`)].join('\n'); }).join('\n\n')}\n`;
+  return `${posts.map((p, i) => { const text = fitPost(p.text); return [`${i + 1}/${posts.length} (${postLength(text)} chars)`, text, ...(p.attach ?? []).map((a) => `[attach ${a}]`), ...(p.none ? ['[no picture: add a screenshot to this story, or post it as text]'] : [])].join('\n'); }).join('\n\n')}\n`;
 }
 
 export function renderRecapTerminal(r, { color = true, width = 100 } = {}) {

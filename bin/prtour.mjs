@@ -9,10 +9,10 @@ import { kindOf, resolve, scaffold } from '../src/tour.mjs';
 import { renderHTML } from '../src/html.mjs';
 import { renderMarkdown, renderTerminal } from '../src/text.mjs';
 import { detect } from '../src/term-images.mjs';
-import { htmlToPdf } from '../src/pdf.mjs';
+import { htmlToPdf, htmlToPng } from '../src/pdf.mjs';
 import { findLanes } from '../src/lanes.mjs';
 import { iconNames, resolveIcons } from '../src/icons.mjs';
-import { renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, renderRecapThread, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
+import { chartCardHTML, slug, renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, renderRecapThread, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
 import { MAX_FILE_MB, MEDIA_BUDGET_MB, budgetWarning, compress, embeddedFiles, isVideo, posterOf } from '../src/media.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
@@ -27,6 +27,7 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
   prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
   prtour render [dir]        write a self-contained HTML file (default <dir>/index.html)
            --format md|term|pdf|thread  Markdown, terminal, PDF (needs Chrome), or (recaps) an X thread draft
+           --media-dir <dir> (thread) copy the files to attach there    --no-links  (recaps) no repo name or PR links
            -o <file>         output path   --split  side-by-side   --wrap  wrap lines
   prtour show [dir]          the tour in the terminal (ANSI, paged)
            --images kitty|iterm|none   inline images; default probes the terminal
@@ -55,7 +56,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-o' || a === '--out') flags.out = argv[++i];
-    else if (['--format', '--port', '--dir', '--images', '--author', '--since', '--until', '--repo', '--link'].includes(a)) flags[a.slice(2)] = argv[++i];
+    else if (['--format', '--port', '--dir', '--images', '--author', '--since', '--until', '--repo', '--link', '--media-dir'].includes(a)) flags[a.slice(2)] = argv[++i];
     else if (a === '-h') flags.help = true;
     else if (a.startsWith('--')) flags[a.slice(2)] = true;
     else pos.push(a);
@@ -79,9 +80,10 @@ function findDir(arg) {
 
 const isRecap = (dir) => fs.existsSync(path.join(dir, 'recap.json'));
 
-function loadRecap(dir) {
+function loadRecap(dir, flags = {}) {
   let rc;
   try { rc = JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8')); } catch (e) { die(`${dir}/recap.json is not valid JSON: ${e.message}`); }
+  if (flags['no-links']) rc.private = true;
   const r = resolveRecap(rc);
   // Media paths are relative to the recap folder; resolve them, and their posters, here.
   const items = [...(rc.workstreams ?? rc.themes ?? []).flatMap((t) => [...(t.media ?? []), ...(t.images ?? []), t.compare?.before, t.compare?.after]), ...(rc.hero?.stories ?? []).flatMap((s) => s.media ?? [])].filter(Boolean);
@@ -92,8 +94,9 @@ function loadRecap(dir) {
     if (!fs.existsSync(im.abs)) { r.warnings.push(`media ${im.src} not found (paths are relative to ${rel(dir)})`); continue; }
     if (fs.statSync(im.abs).size > MAX_FILE_MB * 1e6) r.suggestions.push(`media ${im.src} is ${(fs.statSync(im.abs).size / 1e6).toFixed(0)} MB, over the ${MAX_FILE_MB} MB a file can be to embed, so it is left out; run \`prtour media\` on it`);
     if (!isVideo(im.src)) continue;
-    const poster = posterOf(im);
-    if (poster && fs.existsSync(path.resolve(dir, poster))) im.posterAbs = path.resolve(dir, poster);
+    // A poster is the one named, or <name>.poster.jpg, or <name>-poster.jpg beside the clip.
+    const poster = [im.poster, posterOf(im), im.src.replace(/\.\w+$/, '-poster.jpg')].filter(Boolean).find((x) => /^https?:/.test(x) || fs.existsSync(path.resolve(dir, x)));
+    if (poster) { im.poster = poster; if (!/^https?:/.test(poster)) im.posterAbs = path.resolve(dir, poster); }
     else r.suggestions.push(`clip ${im.src} has no poster frame (the PDF and share cards use it); run \`prtour media\` on the original, or set "poster"`);
   }
   const budget = budgetWarning(embeddedFiles(items.filter((im) => im.src), dir), rc.mediaBudgetMB ?? MEDIA_BUDGET_MB);
@@ -260,8 +263,38 @@ function withPatches(r, dir) {
   return r;
 }
 
+// Thread attachments: media as written in recap.json (relative to the recap
+// folder), or copied into --media-dir so the paths point at a folder you ship.
+// A post whose story has only a chart gets a PNG of it, drawn by headless Chrome.
+function threadFiles(dir, flags) {
+  const out = flags['media-dir'];
+  if (out) fs.mkdirSync(path.resolve(out), { recursive: true });
+  const used = new Map();
+  const place = (abs, name) => {
+    if (!out) return path.relative(dir, abs).split(path.sep).join('/');
+    if (used.has(abs)) return used.get(abs);
+    let file = name;
+    for (let i = 2; [...used.values()].includes(path.join(out, file)); i++) file = name.replace(/(\.\w+)$/, `-${i}$1`);
+    if (path.resolve(out, file) !== abs) fs.copyFileSync(abs, path.resolve(out, file));
+    used.set(abs, path.join(out, file));
+    return used.get(abs);
+  };
+  return {
+    attach: (m) => (m.abs && fs.existsSync(m.abs) ? place(m.abs, path.basename(m.abs)) : m.src),
+    chart: (r) => (w) => {
+      const html = chartCardHTML(r, w);
+      if (!html) return null;
+      const file = path.join(out ? path.resolve(out) : path.join(dir, 'thread'), `${slug(w.name)}-chart.png`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const rows = w.timeline?.rows?.length ?? 0;
+      const height = w.chart?.points?.length ? 400 : Math.round(2 * ((rows * 40 + 34) * 600 / 520 + 40) + 120);
+      return htmlToPng(html, file, { height }) ? place(file, path.basename(file)) : null;
+    },
+  };
+}
+
 async function renderRecap(dir, flags) {
-  const r = withPatches(loadRecap(dir), dir);
+  const r = withPatches(loadRecap(dir, flags), dir);
   await withIcons(r, r.rc);
   for (const w of r.warnings) console.error(`warning: ${w}`);
   for (const w of r.suggestions) console.error(`suggestion: ${w}`);
@@ -271,7 +304,7 @@ async function renderRecap(dir, flags) {
     try { htmlToPdf(await renderRecapHTML(r, { print: true }), out); } catch (e) { die(e.message); }
     return console.log(out);
   }
-  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'thread' ? renderRecapThread(r) : fmt === 'term' ? renderRecapTerminal(r, { color: Boolean(process.stdout.isTTY) && !flags['no-color'] }) : await renderRecapHTML(r);
+  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'thread' ? (() => { const f = threadFiles(dir, flags); return renderRecapThread(r, { attach: f.attach, chart: f.chart(r) }); })() : fmt === 'term' ? renderRecapTerminal(r, { color: Boolean(process.stdout.isTTY) && !flags['no-color'] }) : await renderRecapHTML(r);
   if (fmt !== 'html' && !flags.out) return process.stdout.write(text);
   const out = path.resolve(flags.out ?? path.join(dir, 'index.html'));
   fs.writeFileSync(out, text);
@@ -381,7 +414,7 @@ async function serve(dir, flags) {
   const clients = new Set();
   let html = '';
   const build = async () => {
-    try { html = isRecap(dir) ? (await renderRecapHTML(await withIcons(withPatches(loadRecap(dir), dir), JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8'))))).replace('</body>', "<script>new EventSource('/events').onmessage=()=>location.reload()</script></body>") : await renderHTML(load(dir), { ...flags, live: true }); } catch (e) { html = `<pre>${String(e.stack).replace(/</g, '&lt;')}</pre><script>new EventSource('/events').onmessage=()=>location.reload()</script>`; }
+    try { html = isRecap(dir) ? (await renderRecapHTML(await withIcons(withPatches(loadRecap(dir, flags), dir), JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8'))))).replace('</body>', "<script>new EventSource('/events').onmessage=()=>location.reload()</script></body>") : await renderHTML(load(dir), { ...flags, live: true }); } catch (e) { html = `<pre>${String(e.stack).replace(/</g, '&lt;')}</pre><script>new EventSource('/events').onmessage=()=>location.reload()</script>`; }
     for (const res of clients) res.write('data: reload\n\n');
   };
   await build();

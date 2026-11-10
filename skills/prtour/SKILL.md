@@ -176,14 +176,15 @@ every new name, and keep the engineering detail one click away.
      faster", "Restores come back exact", not "Page renders" or "Chat
      runtime". The renderer writes each section's meta line itself (PR count
      and merge dates); don't add one.
-   - **Category titles.** `check` flags a `headline` or `label` that only
-     names an area. A title passes when it has a digit, an outcome word
-     (faster, fewer, exact, fixed, now, no longer, never, again, zero…), a
-     past tense ("landed"), or a common verb that is not its last word. "Page
-     renders", "Ranged reads", "Live grid and search" and "Attached scrolling"
-     fail (their last word is a noun); "Pages render 5× faster", "Search finds
-     any session" and "Previews fixed" pass. (`title` and `name` still work
-     as older spellings of `headline` and `label`.)
+   - **Category titles.** `check` suggests a rewrite when a `headline` or
+     `label` ends in a category noun (performance, improvements, fixes,
+     updates, refactoring, infra, runtime, cleanup, maintenance, platform,
+     billing, pipeline…) and has no digit or outcome word ("faster", "fixed",
+     "now", "no longer"…). "Bug fixes", "Chat runtime" and "Authentication
+     improvements" get the suggestion; "Dark mode arrives", "Memory leak
+     plugged" and "PDFs 5× faster" don't. It is a narrow net, so still read
+     every title and ask whether it says what happened. (`title` and `name`
+     still work as older spellings of `headline` and `label`.)
    - `symptom` and `howBad`: what people lived through, in their words, with
      no internals, then how often or how badly with a sourced number.
      Not "terminals came back from a replayed ANSI repaint"; instead "after a
@@ -194,7 +195,7 @@ every new name, and keep the engineering detail one click away.
      character, such as a flag emoji, even when it is several code points").
    - Section headers are fixed by the renderer (Fixes, New features,
      Improvements, Why it happened, How it works). Don't invent punchy ones.
-   - One or two visuals, never more:
+   - One to three visuals, never more (`check` warns past three):
      - `timeline`: the clearest way to show contention or waiting. Rows over
        a few seconds, Before and After, with a play button:
        `{"caption", "length": 20, "unit": "ms", "rows": ["Your wheel step",
@@ -228,18 +229,20 @@ every new name, and keep the engineering detail one click away.
    - `title` (the post's headline, e.g. "Acme 2.4: big notebooks open in
      under a second"), `byline`, and `about`: one plain sentence on what the
      product is, for someone who has never heard of it ("Acme is a notes app
-     that keeps every notebook on your own disk"). `check` warns without it.
+     that keeps every notebook on your own disk"). `check` suggests it when
+     it's missing.
    - `summary`: two or three sentences that open with what people were
      living with.
    - `hero`: the top stories, a lead story plus a grid of the rest.
      `{"stories": [{"workstream": "<label>", "headline", "why", "media":
      [{"src", "caption"}]}], "tldr": ["…", "…", "…"]}`. Pick the 2 to 4
-     biggest outcomes; `check` warns past 4, since a hero that lists
+     biggest outcomes; `check` suggests trimming past 4, since a hero that lists
      everything stops being one. Each story's `headline` and `why` default to
      its workstream's `headline` and `now`, and its media to the
      workstream's first `media` item; `why` is one line on why it matters to
-     the reader. Every story needs a visual: its media, or else the card shows a compact copy of its workstream's chart or timeline. `tldr` is 2 to 4 short bullets
-     that cover all the top stories.
+     the reader. Every story needs a visual: its media, or else the card
+     shows a compact copy of its workstream's chart or timeline. `tldr` is 2
+     to 4 short bullets that cover all the top stories.
    - The lead story's kind leads the page (an improvement can come before
      Fixes), and top stories lead their group. `"order": ["feature", "fix",
      "improvement"]` sets the order by hand.
@@ -247,24 +250,40 @@ every new name, and keep the engineering detail one click away.
      internal name a reader meets, as `{"term", "what", "why"}`: `what` is one
      plain sentence on what it is, `why` is why it matters here. The first use
      of each term in the text links to its entry and shows `what` on hover.
-     `check` warns when a headline, label, `about`, `summary`, top story or
-     TL;DR uses something that looks like a code or package name (anything in
-     backticks, `@scope/name`, or kebab-case such as `lite-index`) with no
-     glossary entry. Common compounds ("follow-up", "read-only") pass.
-   - `url` (optional): where the page will be hosted. The Open Graph and X
-     card tags use it to make the share image absolute.
+     `check` suggests an entry when a headline, label, `about`, `summary`,
+     top story or TL;DR uses something that looks like a code or package
+     name: anything in backticks, `@scope/name`, camelCase, SCREAMING_CASE,
+     a file name, or kebab-case with a digit or three or more parts
+     (`lite-index-v2`). Plain English compounds ("open-source",
+     "two-factor") pass, and so does a two-part name like `lite-index`, so
+     put new names in backticks.
+   - `url`: where the page will be hosted, as an absolute link
+     (`https://…`). The Open Graph and X card tags use it to make the share
+     image absolute, and the thread ends with it.
+   - `"private": true` (or `render --no-links`) leaves out the repo name and
+     PR links, for a public post about a private repo. PR numbers stay as
+     plain text.
    - The overview lists are built from each workstream's `symptom`/`headline`
-     and `now`, so write those well. Add `dayNotes` and readable `lanes`
-     names.
+     and `now`, so write those well. Add `dayNotes`, and a readable name in
+     `lanes` for every lane key, or the lanes chart shows raw session ids
+     (`check` lists the missing ones).
 5. Every number comes from a PR, a context file or measured evidence. Never
    estimate. The writing rules above apply, and `check` enforces them, plus the
-   limits on visuals and diffs per workstream. Then `render` (HTML),
+   limits on visuals and diffs per workstream; it fails only on those.
+   Release-post advice (titles, glossary, hero, media, links) prints under
+   "Suggestions" and doesn't fail it, so read it and act on what fits. Then `render` (HTML),
    `--format pdf`, `--format md`, `--format thread`, or `show`. The PDF is
    compact by design (10 pt, PR lists left out, clips shown as their poster
    frame); the HTML holds everything. `--format thread` prints a 5 to 8 post
-   X thread draft: an opener, one post per top story with the media file to
-   attach, a few more workstreams, and the link. Each post fits 280
-   characters.
+   X thread draft: an opener (with the TL;DR, or the TL;DR as the next post
+   when it doesn't fit), one post per top story with the file to attach, a
+   few more workstreams that each read on their own, and the link. Each post
+   fits 280 characters, counted the way X counts (CJK and emoji 2, links 23).
+   `--media-dir <dir>` copies every file to attach into one folder to ship.
+   A story whose only visual is a chart gets a PNG of it, drawn with the same
+   Chrome as the PDF; without Chrome its post says it has no picture. Chart
+   x labels that would collide are drawn at an angle; shorter labels read
+   better, and `check` says when that happens.
 6. Read it back as someone who wasn't there. If a headline needs the body to
    make sense, a symptom names an internal, or a name appears that the
    glossary doesn't explain, rewrite it.
@@ -295,14 +314,21 @@ no customer names or data, personal details, emails, tokens or keys, internal
 URLs or hostnames, private repos, or other people's messages. Crop or blur, or
 leave it out. The page is meant to be shared.
 
-Then compress: `npx -y prtour media <file…> [-o media]` uses whatever the
-machine has (ffmpeg, cwebp or sips). Stills become webp or jpg at most 1600 px
-wide; clips and GIFs become muted H.264 mp4 at most 1280 px wide, plus a
-`<name>.poster.jpg` poster frame. It prints `media` entries to paste; write a
+Then compress: `npx -y prtour media <file…> --dir <recap folder>` uses
+whatever the machine has (ffmpeg, cwebp or sips). Stills become webp or jpg
+at most 1600 px wide; clips and GIFs become muted H.264 mp4 at most 1280 px
+wide, plus a `<name>.poster.jpg` poster frame (a `<name>-poster.jpg` beside a
+clip is found too). Files go to `<recap folder>/media`; a name that is taken
+gets `-2`, `-3`, and nothing is overwritten without `--force`. It prints
+`media` entries to paste, with `src` relative to the recap folder; write a
 caption for each that says what the reader is looking at. Keep clips short (5
-to 20 s). The HTML embeds media as data URIs (a file used in a top story and in its section is embedded once), and `check` warns when the total
-passes 12 MB (`"mediaBudgetMB"` changes the budget) or a clip has no poster.
-In the HTML, clips play muted and looped while on screen, and a click pauses
+to 20 s).
+
+The HTML embeds media as data URIs. Stills under 500 KB are embedded at each
+use; a clip or large file used twice (a top story and its section) is
+embedded once and shared. `check` suggests trimming when the total passes
+12 MB (`"mediaBudgetMB"` changes the budget) or a clip has no poster, and a
+file over 50 MB is left out. Clips play muted and looped, and a click pauses
 them. Markdown links the files, so ship the media folder alongside it.
 
 

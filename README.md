@@ -159,12 +159,15 @@ heard of the product:
   carry the idea. The biggest story's group goes first. Engineering detail is
   folded away.
 
-Screenshots and clips are embedded in the page. `prtour media` compresses
+`check` still fails only on the 0.1 rules; this advice prints as
+suggestions. Screenshots and clips are embedded in the page. `prtour media` compresses
 them first: stills to webp or jpg at most 1600 px wide, clips to muted H.264
 mp4 at most 1280 px wide with a poster frame, using ffmpeg, cwebp or sips.
 Clips play muted and looped while on screen. The page carries Open Graph and
 X card tags, and `--format thread` drafts an X thread with one post per top
-story and the file to attach to each. The recap also renders as a compact
+story and the file to attach to each (`--media-dir` gathers them in one
+folder). `"private": true` or `--no-links` leaves out the repo name and PR
+links for a public post about a private repo. The recap also renders as a compact
 PDF (clips as their poster frames), Markdown that links the media files, or
 in the terminal.
 
@@ -184,13 +187,13 @@ prtour [target…]           init + open in the browser
 prtour init [target…]      fetch the diff, scaffold .prtour/<slug>/tour.json (--stack, --dir)
 prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
 prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
-prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf|thread; --split; --wrap)
+prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf|thread; --split; --wrap; --media-dir; --no-links)
 prtour show [dir]          terminal view
 prtour open [dir]          live-reload server + reviewer feedback
 prtour feedback [dir]      reviewer comments as Markdown (--clear)
 prtour post [dir]          notes as an inline GitHub review (--link, --dry-run)
 prtour recap               what shipped across many PRs (--author, --since, --until, --repo, --no-lanes)
-prtour media <file…>       compress screenshots and clips for a recap (-o <dir>, default ./media)
+prtour media <file…>       compress screenshots and clips for a recap (--dir <recap>, -o <dir>, --force)
 prtour skill [--install]   agent instructions
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -

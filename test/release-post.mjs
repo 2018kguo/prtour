@@ -207,3 +207,62 @@ if (ffmpeg) {
   assert.ok(fs.existsSync(path.join(dir, 'out', 'demo.poster.jpg')));
 }
 console.log(`release-post ok${ffmpeg ? '' : ' (no ffmpeg: media compression skipped)'}`);
+
+// ---- feedback from building a real release post ----------------------------
+// Print: the lead story may break, and its visual is capped so it fits page 1.
+assert.match(print, /\.story\.lead\{break-inside:auto\}\.story\.lead \.fig img\{max-height:80mm\}/);
+// The overview lists don't repeat the part headings.
+assert.match(html, /<h2>What got better<\/h2>/);
+assert.doesNotMatch(html, /<section class="ov"><h2>Improvements<\/h2>/);
+
+// Visual cap is 3 per workstream.
+const vis = (n) => resolveRecap({ ...structuredClone(good), workstreams: [{ ...good.workstreams[0], media: Array.from({ length: n }, () => ({ src: 'media/shot.png' })) }], hero: undefined }).warnings.some((w) => /visuals; keep/.test(w));
+assert.deepEqual([vis(3), vis(4)], [false, true]);
+
+// Suggestions: lanes without readable names; chart labels that collide (drawn at an angle).
+const lanesRc = { ...structuredClone(good), prs: good.prs.map((p, i) => ({ ...p, lane: i ? 'codex 1a2b3c4d' : 'main' })), lanes: { main: 'Main lane' } };
+assert.ok(resolveRecap(lanesRc).suggestions.some((x) => x.startsWith('lanes: 1 lane(s) with no readable name in "lanes" ("codex 1a2b3c4d")')));
+const crowdedRc = structuredClone(good);
+crowdedRc.workstreams[0].chart = { title: 'Per service', points: Array.from({ length: 12 }, (_, i) => ({ x: `service-number-${i}-long-name`, y: i + 1 })) };
+const crr = resolveRecap(crowdedRc);
+assert.ok(crr.suggestions.some((x) => /chart: 12 bars with labels up to 27 characters overlap/.test(x)));
+assert.match(await renderRecapHTML(crr), /<text transform="translate\([\d.]+ [\d.]+\) rotate\(-35\)" text-anchor="end" class="ch-x">service-number-0-long-name/);
+
+// "private": true (or --no-links) drops the repo name and PR links; numbers stay as text.
+const priv = { ...structuredClone(good), repo: 'acme/secret', summary: 'Fixed in #3.', private: true };
+const phtml = await renderRecapHTML(resolveRecap(priv));
+assert.doesNotMatch(phtml, /acme\/secret|example\.com\/pr\/|github\.com\/acme/);
+assert.match(phtml, /Fixed in <span class="pr">#3<\/span>\./);
+write({ ...good, repo: 'acme/secret', summary: 'Fixed in #3.' });
+assert.doesNotMatch(run('render', dir, '--no-links', '-o', 'p.html') && fs.readFileSync(path.join(dir, 'p.html'), 'utf8'), /github\.com\/acme\/secret/);
+assert.doesNotMatch(run('render', dir, '--format', 'md', '--no-links'), /\]\(https:\/\/example\.com\/pr/);
+
+// Posters: <name>-poster.jpg is found too.
+fs.writeFileSync(path.join(dir, 'media', 'clip-poster.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+write(good);
+assert.doesNotMatch(run('check', dir), /has no poster/);
+assert.match(run('render', dir, '--format', 'md'), /\(media\/clip-poster\.jpg\)\]\(media\/clip\.mp4\)/);
+
+// Thread: a TL;DR too long for the opener gets its own post; workstream posts stand alone;
+// --media-dir copies what to attach; a chart-only story gets a PNG of its chart (with Chrome) or says it has none.
+const th = structuredClone(good);
+th.hero.tldr = ['Notebooks open in 0.4 s instead of 2.6 s, even with five thousand pages and a slow disk.', 'Live cursors show who is typing on every page of every shared notebook.', 'Search no longer freezes the window on the very largest notebooks people keep.'];
+th.hero.stories = [{ workstream: 'Notebooks open 6× faster', why: 'Big notebooks open at once.' }];
+delete th.workstreams[1].media;
+th.workstreams[1].chart = { title: 'Median open time', unit: ' s', points: [{ x: 'before', y: 2.6 }, { x: 'after', y: 0.4 }] };
+th.workstreams[0].now = 'It stays responsive.';
+th.workstreams[0].wins = ['Typing in search on a 2 GB notebook no longer blocks the window'];
+write(th);
+const tout = run('render', dir, '--format', 'thread', '--media-dir', 'ship');
+const tposts = tout.trim().split(/\n\n(?=\d+\/\d+ \()/);
+assert.match(tposts[1], /^2\/\d+ \(\d+ chars\)\nTL;DR\n- Notebooks open/);
+assert.match(tout, /Search no longer freezes on 2 GB notebooks\n\nTyping in search on a 2 GB notebook no longer blocks the window/);
+assert.doesNotMatch(tout, /It stays responsive/);
+assert.match(tout, /Live cursors[\s\S]*?\[attach ship\/shot\.png\]/);
+assert.ok(fs.existsSync(path.join(dir, 'ship', 'shot.png')));
+const { findChrome } = await import('../src/pdf.mjs');
+if (findChrome()) {
+  assert.match(tout, /Notebooks open in 0\.4 s[\s\S]*?\[attach ship\/notebooks-open-6-faster-chart\.png\]/);
+  assert.equal(fs.readFileSync(path.join(dir, 'ship', 'notebooks-open-6-faster-chart.png')).readUInt32BE(0), 0x89504e47);
+} else assert.match(tout, /Notebooks open in 0\.4 s[\s\S]*?\[no picture/);
+console.log('release-post feedback ok');

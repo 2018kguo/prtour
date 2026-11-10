@@ -35,3 +35,17 @@ export function htmlToPdf(html, out) {
   if (!fs.existsSync(out)) throw new Error('Chrome did not write the PDF');
   return out;
 }
+
+// A screenshot of a small page (a chart for a thread post), at 2x.
+export function htmlToPng(html, out, { width = 648, height = 480 } = {}) {
+  const chrome = findChrome();
+  if (!chrome) return null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prtour-png-'));
+  const src = path.join(dir, 'page.html');
+  fs.writeFileSync(src, html);
+  try {
+    execFileSync(chrome, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${path.join(dir, 'profile')}`, '--hide-scrollbars',
+      '--force-device-scale-factor=2', `--window-size=${width},${height}`, '--virtual-time-budget=3000', `--screenshot=${path.resolve(out)}`, `file://${src}`], { stdio: 'ignore', timeout: 60000 });
+  } catch { return null; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  return fs.existsSync(out) ? out : null;
+}
