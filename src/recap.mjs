@@ -389,7 +389,7 @@ ${w.explain ? `<h3>${w.kind === 'feature' ? 'How it works' : 'Why it happened'}<
 ${visuals[0] ?? ''}
 ${wins.length ? `<h3>${w.kind === 'feature' ? 'What it does' : 'What changed'}</h3><ul class="wins">${wins.map((x) => `<li>${inline(x.text, rc)}${refs(rc, x.prs)}</li>`).join('')}</ul>` : ''}
 ${w.demo ? `<h3>Show it</h3><ol class="demo">${[w.demo].flat().map((x) => `<li>${inline(x, rc)}</li>`).join('')}</ol>` : ''}
-${visuals[1] ?? ''}
+${visuals.slice(1).join('\n')}
 ${diffs.filter(Boolean).length ? `<h3>The change, in code</h3>${diffs.join('')}` : ''}
 ${w.designCall ? `<h3>The idea that made it work</h3>${prose(w.designCall, rc)}` : ''}
 ${w.triedFirst ? `<h3>What we tried first</h3>${prose(w.triedFirst, rc)}` : ''}

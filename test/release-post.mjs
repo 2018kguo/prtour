@@ -218,6 +218,12 @@ assert.doesNotMatch(html, /<section class="ov"><h2>Improvements<\/h2>/);
 // Visual cap is 3 per workstream.
 const vis = (n) => resolveRecap({ ...structuredClone(good), workstreams: [{ ...good.workstreams[0], media: Array.from({ length: n }, () => ({ src: 'media/shot.png' })) }], hero: undefined }).warnings.some((w) => /visuals; keep/.test(w));
 assert.deepEqual([vis(3), vis(4)], [false, true]);
+// ...and all three render: the section used to draw only the first two.
+const three = structuredClone(good);
+three.hero = undefined;
+three.workstreams = [{ ...three.workstreams[0], media: ['one', 'two', 'three'].map((n) => ({ src: 'media/shot.png', abs: path.join(dir, 'media/shot.png'), caption: `Visual ${n}.` })) }];
+const threeHtml = await renderRecapHTML(resolveRecap(three));
+for (const n of ['one', 'two', 'three']) assert.match(threeHtml, new RegExp(`Visual ${n}\\.`));
 
 // Suggestions: lanes without readable names; chart labels that collide (drawn at an angle).
 const lanesRc = { ...structuredClone(good), prs: good.prs.map((p, i) => ({ ...p, lane: i ? 'codex 1a2b3c4d' : 'main' })), lanes: { main: 'Main lane' } };
