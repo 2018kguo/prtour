@@ -51,33 +51,39 @@ export function scaffoldRecap(prs, meta) {
 
 const TEXT_FIELDS = [['title', 90], ['name', 40], ['asked', 260], ['symptom', 200], ['howBad', 240], ['now', 220], ['explain', 700], ['before', 900], ['designCall', 500], ['proof', 900], ['trade', 500], ['triedFirst', 420]];
 
-// A headline or nav label that only names a category ("Page renders", "Chat
-// runtime") says nothing happened. One passes with a digit, an outcome word
-// ("faster", "fixed", "now"), a past tense ("landed"), or a known verb that is
-// not the last word: the last word of "Page renders", "Live search" or
-// "Attached scrolling" is a noun.
-const OUTCOME = /\d|\b(?:faster|slower|smaller|bigger|cheaper|fewer|less|more|exact(?:ly)?|instant(?:ly)?|now|no longer|never|always|again|zero|none|half|twice|fixed|gone|safer|clearer|sharper|smoother|lighter|offline)\b/i;
-const VERBS = 'add allow appear arrive break build catch come cut drop explain export fail find finish fit fix get go grow handle hide import keep land last launch learn load lose make match move open paint pass pay play reach read recover remember render replace restore resume return run save scale scroll search see send ship show skip sort speak split start stay stop survive sync take tell track turn type undo update upload wait warn work write'.split(' ');
-const IRREGULAR = ['broke', 'built', 'caught', 'came', 'found', 'got', 'went', 'grew', 'kept', 'lost', 'made', 'paid', 'ran', 'saw', 'sent', 'took', 'told', 'wrote', 'is', 'are', 'was', 'were', 'has', 'have', 'can', 'will'];
-const PAST = new Set([...VERBS.flatMap((v) => [`${v.replace(/e$/, '')}ed`, `${/[^aeiou][aeiou][bdgmnprt]$/.test(v) ? v + v.at(-1) : v}ed`]), ...IRREGULAR]);
-const VERB_ANY = new Set(VERBS.flatMap((v) => { const e = v.replace(/e$/, ''); const dbl = /[^aeiou][aeiou][bdgmnprt]$/.test(v) ? v + v.at(-1) : v; return [v, `${v}s`, `${v}es`, `${e}ing`, `${dbl}ing`]; }));
+// A headline or label that only names an area ("Chat runtime", "Bug fixes")
+// says nothing happened. It is flagged only when its last word is a known
+// category noun and nothing else in it (a digit or an outcome word) says what
+// changed. Words that could be verbs ("renders", "landed") never count, and
+// titles in a non-Latin script are left alone.
+const CATEGORY = new Set('performance improvement improvements fix fixes bugfixes update updates refactor refactors refactoring infra infrastructure runtime misc miscellaneous cleanup cleanups chore chores maintenance enterprise platform tooling internals dependencies polish tweaks stuff accessibility billing authentication layout migrations pipeline housekeeping work'.split(' '));
+const OUTCOME = /\d|\b(?:faster|slower|smaller|cheaper|fewer|exact(?:ly)?|instant(?:ly)?|now|no longer|never|again|zero|half|twice|fixed|gone|safer)\b/i;
 export function categoryOnly(title) {
   const t = stripCode(title).trim();
-  if (!t || OUTCOME.test(t)) return false;
-  const words = t.toLowerCase().match(/[a-z']+/g) ?? [];
-  return !words.some((wd, i) => PAST.has(wd) || (VERB_ANY.has(wd) && i < words.length - 1));
+  if (!t || /[^\p{Script=Latin}\p{N}\p{P}\p{S}\p{Z}\p{M}]/u.test(t.replace(/\s/g, ''))) return false;
+  if (OUTCOME.test(t)) return false;
+  return CATEGORY.has(t.toLowerCase().match(/[\p{L}']+/gu)?.at(-1) ?? '');
 }
 
-// Words a newcomer can't know: `code`, @scope/packages and kebab-case names.
-// Common English compounds ("follow-up", "re-render", "read-only") pass.
-const KEBAB_OK = new Set(['follow-up', 'built-in', 'end-to-end', 'side-by-side', 'up-to-date', 'drag-and-drop', 'sign-in', 'log-in', 'opt-in', 'opt-out', 'one-click', 'x-ray', 'e-mail', 'day-to-day', 'out-of-the-box', 'well-known', 'first-class', 'long-running', 'full-screen', 'full-text', 'how-to', 'state-of-the-art']);
-const KEBAB_AFFIX = /^(?:re|pre|non|multi|co|self|cross|sub|un|anti|semi|over|under|in)-|-(?:time|only|free|based|level|side|wide|like|friendly|ready|safe|aware|up|down|in|out|on|off|\w+ing|\w+ed)$/;
+// Names a newcomer can't know: anything in backticks, @scope/packages,
+// camelCase, SCREAMING_CASE, file names, and kebab-case words with a digit or
+// three or more parts ("text-gray-500", "lite-index-v2"). Plain English
+// compounds pass ("open-source", "two-factor", "state-of-the-art"), as do URLs,
+// domains and email addresses.
+const BRANDS = new Set(['iOS', 'iPadOS', 'macOS', 'watchOS', 'tvOS', 'visionOS', 'iPhone', 'iPad', 'iCloud', 'iMac', 'eBay', 'iTunes']);
+const LINKING = /-(?:of|to|by|the|and|or|in|on|a|an|for|over|per|vs)-/;
+const FILE = /^[\w-]+\.(?:ya?ml|json|toml|[cm]?js|tsx?|jsx|py|go|rs|rb|java|kt|swift|cpp|md|sh|sql|lock|env|ini|cfg|conf|xml|csv)$/;
 export function codeTerms(text) {
   const out = new Set();
-  for (const m of String(text ?? '').matchAll(/`([^`]+)`|(@[a-z0-9][\w.-]*\/[\w.-]+)|(?<![\w@/.-])([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?![\w/.-]*\w)/g)) {
-    if (m[1]) { if (/^[@\w./:-]+$/.test(m[1]) && /[a-z]/i.test(m[1])) out.add(m[1]); }
-    else if (m[2]) out.add(m[2]);
-    else if (!KEBAB_OK.has(m[3]) && !KEBAB_AFFIX.test(m[3])) out.add(m[3]);
+  const t = String(text ?? '').replace(/https?:\/\/\S+|\S+@\S+\.\w+|\b[\w-]+(?:\.[\w-]+)+\/\S*/g, ' ');
+  for (const m of t.matchAll(/`([^`]+)`|(@[a-z0-9][\w.-]*\/[\w.-]*\w)|([\w.@/-]+)/gi)) {
+    if (m[1]) { if (/^[@\w./:-]+$/.test(m[1]) && /\p{L}/u.test(m[1])) out.add(m[1]); continue; }
+    if (m[2]) { out.add(m[2]); continue; }
+    const w = m[3].replace(/^[^\w@]+|[^\w]+$/g, '');
+    if (/^[a-z][a-z0-9]*[A-Z]\w*$/.test(w) && !BRANDS.has(w)) out.add(w);
+    else if (/^[A-Z][A-Z0-9]*_[A-Z0-9_]+$/.test(w)) out.add(w);
+    else if (FILE.test(w)) out.add(w);
+    else if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(w) && (/\d/.test(w) || (w.split('-').length >= 3 && !LINKING.test(`-${w}-`)))) out.add(w);
   }
   return [...out];
 }
@@ -86,6 +92,8 @@ export const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').r
 
 export function resolveRecap(rc) {
   const warnings = [];
+  // Release-post advice (titles, glossary, hero, media, share links) never fails `check`.
+  const suggestions = [];
   const prs = (rc.prs ?? []).slice().sort((a, b) => String(a.mergedAt).localeCompare(String(b.mergedAt)));
   const byNum = new Map(prs.map((p) => [p.number, p]));
   const wsOf = new Map();
@@ -93,7 +101,7 @@ export function resolveRecap(rc) {
   const listed = (rc.workstreams ?? rc.themes ?? []).map((w) => ({ ...w, title: w.headline ?? w.title, name: w.label ?? w.name ?? w.headline ?? w.title, media: [...(w.media ?? []), ...(w.images ?? [])] }));
   const find = (key) => listed.find((w) => [w.name, w.label, w.title].includes(key));
   const top = (rc.hero?.stories ?? []).map((s) => ({ ...s, ws: find(s.workstream) }));
-  for (const s of top) if (s.workstream && !s.ws) warnings.push(`hero story "${s.headline ?? s.workstream}": no workstream labelled "${s.workstream}"`);
+  for (const s of top) if (s.workstream && !s.ws) suggestions.push(`hero story "${s.headline ?? s.workstream}": no workstream labelled "${s.workstream}"`);
   // The lead story's kind goes first, so the biggest story leads even when it's an improvement; `order` overrides.
   const kinds = [...new Set([...(rc.order ?? []), ...(top[0]?.ws ? [kindOfWs(top[0].ws)] : []), 'fix', 'feature', 'improvement'])].filter((k) => KINDS[k]);
   const rank = (w) => { const i = top.findIndex((s) => s.ws === w); return i < 0 ? top.length : i; };
@@ -131,26 +139,28 @@ export function resolveRecap(rc) {
     if (stripCode(text).length > max) warnings.push(`writing, ${where}: ${stripCode(text).length} chars (max ${max}); say less`);
   }
   // Release-post checks: an opening for newcomers, headlines that say what happened, a short hero, named pieces explained.
-  if (!rc.about) warnings.push('no "about": say in one sentence what the product is, for a reader who has never heard of it');
-  if (stories.length > 4) warnings.push(`hero: ${stories.length} top stories; keep the 2 to 4 biggest, or the hero stops being a hero`);
-  if (stories.length && !(rc.hero?.tldr ?? []).length) warnings.push('hero: no "tldr"; give 2 to 4 short bullets that cover the top stories');
-  if ((rc.hero?.tldr ?? []).length > 4) warnings.push(`hero: ${rc.hero.tldr.length} TL;DR bullets; keep it to 4 at most`);
+  if (rc.url) { try { new URL(rc.url); } catch { suggestions.push(`url "${rc.url}" is not an absolute link (https://…); share tags and the thread skip it`); } }
+  else if (stories.length) suggestions.push('no "url": say where the page will be hosted, so share cards get an absolute image and the thread ends with the link');
+  if (!rc.about) suggestions.push('no "about": say in one sentence what the product is, for a reader who has never heard of it');
+  if (stories.length > 4) suggestions.push(`hero: ${stories.length} top stories; keep the 2 to 4 biggest, or the hero stops being a hero`);
+  if (stories.length && !(rc.hero?.tldr ?? []).length) suggestions.push('hero: no "tldr"; give 2 to 4 short bullets that cover the top stories');
+  if ((rc.hero?.tldr ?? []).length > 4) suggestions.push(`hero: ${rc.hero.tldr.length} TL;DR bullets; keep it to 4 at most`);
   for (const s of stories) {
-    if (!s.why) warnings.push(`top story "${s.headline}": no "why" (one line on why it matters)`);
-    if (!s.media.length && !s.ws?.chart?.points?.length && !s.ws?.timeline?.rows?.length) warnings.push(`top story "${s.headline}": no visual; add "media" (a screenshot or a short clip) to it or its workstream, or give the workstream a chart or timeline`);
+    if (!s.why) suggestions.push(`top story "${s.headline}": no "why" (one line on why it matters)`);
+    if (!s.media.length && !s.ws?.chart?.points?.length && !s.ws?.timeline?.rows?.length) suggestions.push(`top story "${s.headline}": no visual; add "media" (a screenshot or a short clip) to it or its workstream, or give the workstream a chart or timeline`);
   }
   for (const w of ws) {
-    if (categoryOnly(w.title)) warnings.push(`"${w.name}" headline "${w.title}" only names a category; say what happened (a verb, a number or an outcome word, as in "PDFs open 5x faster")`);
-    if (categoryOnly(w.name)) warnings.push(`"${w.name}" label only names a category; make it a 2 to 4 word outcome ("PDFs 5x faster", not "Page renders")`);
-    if ((w.name ?? '').split(/\s+/).length > 4) warnings.push(`"${w.name}" label: ${(w.name ?? '').split(/\s+/).length} words; the nav label is 2 to 4`);
+    const cat = [['label', w.name], ['headline', w.title]].find(([, x]) => categoryOnly(x));
+    if (cat) suggestions.push(`"${w.name}" ${cat[0]} "${cat[1]}" only names an area; say what happened ("PDFs open 5× faster", "Bug fixes" becomes "Crash on upload fixed")`);
+    if ((w.name ?? '').split(/\s+/).length > 4) suggestions.push(`"${w.name}" label: ${(w.name ?? '').split(/\s+/).length} words; the nav label is 2 to 4`);
   }
   const known = new Set(glossary.map((g) => g.term.toLowerCase()));
   const named = new Map();
   for (const [where, text] of [['title', rc.title], ['about', rc.about], ['summary', [rc.summary ?? ''].flat().join(' ')], ...stories.flatMap((s) => [[`top story "${s.headline}"`, `${s.headline} ${s.why ?? ''}`]]), ...(rc.hero?.tldr ?? []).map((x) => ['tldr', x]), ...ws.map((w) => [`"${w.name}" headline`, `${w.title ?? ''} ${w.name ?? ''}`])]) {
     for (const t of codeTerms(text)) if (!known.has(t.toLowerCase()) && !named.has(t)) named.set(t, where);
   }
-  for (const [t, where] of named) warnings.push(`${where}: "${t}" looks like a code or package name a newcomer won't know; add it to "glossary" ({"term", "what", "why"}) or say it in plain words`);
-  for (const g of glossary) if (!g.what) warnings.push(`glossary "${g.term}": no "what" (one plain sentence on what it is)`);
+  for (const [t, where] of named) suggestions.push(`${where}: "${t}" looks like a code or package name a newcomer won't know; add it to "glossary" ({"term", "what", "why"}) or say it in plain words`);
+  for (const g of glossary) if (!g.what) suggestions.push(`glossary "${g.term}": no "what" (one plain sentence on what it is)`);
   for (const w of ws) {
     if (!w.items.length) warnings.push(`"${w.name}": no PRs; list them in "prs"`);
     if (w.kind === 'feature' && !w.demo) warnings.push(`"${w.name}": a feature needs "demo": how to show it, in 1 to 4 steps`);
@@ -164,7 +174,7 @@ export function resolveRecap(rc) {
   }
   const days = [...new Set(prs.map((p) => day(p.mergedAt)))];
   const stats = { prs: prs.length, additions: prs.reduce((s, p) => s + p.additions, 0), deletions: prs.reduce((s, p) => s + p.deletions, 0), days: days.length };
-  return { rc, prs, ws, themes: ws, wsOf, themeOf: wsOf, rest, warnings, stats, stories, glossary };
+  return { rc, prs, ws, themes: ws, wsOf, themeOf: wsOf, rest, warnings, suggestions, stats, stories, glossary };
 }
 
 const day = (iso) => String(iso).slice(0, 10);
@@ -268,32 +278,43 @@ function chartHTML(c, rc, compact = false) {
 
 // Screenshots and clips, embedded. A clip plays muted and looped while on screen (click
 // pauses it); with reduced motion it waits for a click. The PDF shows its poster frame.
-// A local file is embedded once. Its first use carries the data URI and `data-m-<attr>`;
-// later uses carry `data-same-<attr>`, and SAME_JS copies the URI over on load (print too).
+// Stills under SHARE_MIN are embedded at every use, so the page shows them with
+// scripts off. Clips and large files are embedded once: the first use carries
+// the data URI and `data-m-<attr>`, later uses carry `data-same-<attr>`, which
+// SAME_JS fills on load (Chrome runs it when printing too), plus a <noscript>
+// link to the first copy.
+const SHARE_MIN = 500e3;
 function embed(rc, attr, abs, src) {
-  if (/^https?:/.test(src ?? '')) return ` ${attr}="${esc(src)}"`;
+  if (/^https?:/.test(src ?? '')) return { attrs: ` ${attr}="${esc(src)}"` };
   const ctx = CTX.get(rc);
-  const id = ctx?.media.get(abs);
-  if (id) return ` data-same-${attr}="${id}"`;
+  const shared = ctx && abs && (isVideo(src) || (fs.existsSync(abs) && fs.statSync(abs).size >= SHARE_MIN));
+  if (shared && ctx.media.has(abs)) return { attrs: ` data-same-${attr}="${ctx.media.get(abs)}"`, same: ctx.media.get(abs) };
   const url = dataUrl(abs, src);
   if (!url) return null;
-  if (!ctx) return ` ${attr}="${url}"`;
+  if (!shared) return { attrs: ` ${attr}="${url}"` };
   ctx.media.set(abs, `m${ctx.media.size + 1}`);
-  return ` ${attr}="${url}" data-m-${attr}="${ctx.media.get(abs)}"`;
+  return { attrs: ` ${attr}="${url}" data-m-${attr}="${ctx.media.get(abs)}"`, first: ctx.media.get(abs) };
 }
 const SAME_JS = `<script>document.querySelectorAll('[data-same-src],[data-same-poster]').forEach(e=>['src','poster'].forEach(a=>{const id=e.getAttribute('data-same-'+a);if(!id)return;const s=document.querySelector('[data-m-src="'+id+'"]'),p=s?null:document.querySelector('[data-m-poster="'+id+'"]');const u=s?s.getAttribute('src'):p&&p.getAttribute('poster');if(u)e.setAttribute(a,u)}))</script>`;
 
 function figure(im, rc, cls = 'fig') {
   const cap = im.caption ? `<figcaption>${inline(im.caption, rc)}</figcaption>` : '';
+  const wrap = (el, ...parts) => {
+    const first = parts.find((x) => x?.first)?.first;
+    const same = parts.find((x) => x?.same)?.same;
+    return `<figure class="${cls}"${first ? ` id="media-${first}"` : ''}>${el}${same ? `<noscript><a href="#media-${same}">See it where it first appears</a></noscript>` : ''}${cap}</figure>`;
+  };
   if (!isVideo(im.src)) {
     const src = embed(rc, 'src', im.abs, im.src);
-    return src ? `<figure class="${cls}"><img class="zoomable"${src} alt="${esc(im.alt ?? im.caption ?? '')}">${cap}</figure>` : '';
+    return src ? wrap(`<img class="zoomable"${src.attrs} alt="${esc(im.alt ?? im.caption ?? '')}">`, src) : '';
   }
   const remote = /^https?:/.test(posterOf(im) ?? '') ? posterOf(im) : null;
-  const poster = (attr) => (im.posterAbs ? embed(rc, attr, im.posterAbs, im.posterAbs) : remote ? ` ${attr}="${esc(remote)}"` : null);
-  if (CTX.get(rc)?.print) { const p = poster('src'); return p ? `<figure class="${cls}"><img${p} alt="${esc(im.caption ?? '')}">${cap}</figure>` : ''; }
+  const poster = (attr) => (im.posterAbs ? embed(rc, attr, im.posterAbs, im.posterAbs) : remote ? { attrs: ` ${attr}="${esc(remote)}"` } : null);
+  if (CTX.get(rc)?.print) { const p = poster('src'); return p ? wrap(`<img${p.attrs} alt="${esc(im.caption ?? '')}">`, p) : ''; }
   const src = embed(rc, 'src', im.abs, im.src);
-  return src ? `<figure class="${cls}"><video${src}${poster('poster') ?? ''} muted loop playsinline preload="metadata" data-clip aria-label="${esc(im.caption ?? 'Clip')}"></video>${cap}</figure>` : '';
+  const p = poster('poster');
+  // autoplay keeps clips playing with scripts off; CLIENT_JS pauses them off screen or under reduced motion.
+  return src ? wrap(`<video${src.attrs}${p?.attrs ?? ''} muted autoplay loop playsinline preload="metadata" data-clip aria-label="${esc(im.caption ?? 'Clip')}"></video>`, src, p) : '';
 }
 
 function stepsHTML(st, rc) {
@@ -421,6 +442,8 @@ function glossaryHTML(r) {
   return `<section class="ov glossary" id="glossary"><h2>Meet the new pieces</h2><dl>${r.glossary.map((g) => `<div id="${g.id}"><dt>${esc(g.term)}</dt><dd>${def(g.what)}${g.why ? ` <span class="g-why">${def(g.why)}</span>` : ''}</dd></div>`).join('')}</dl></section>`;
 }
 
+const absUrl = (u) => { try { return u ? new URL(u).href : null; } catch { return null; } };
+
 // Open Graph and Twitter cards. Crawlers ignore data URIs, so the image is the top
 // story's still (or a clip's poster) as a file path, made absolute when "url" is set.
 function shareMeta(r) {
@@ -430,10 +453,11 @@ function shareMeta(r) {
   const cut = desc.length > 200 ? `${desc.slice(0, 197).replace(/\s+\S*$/, '')}…` : desc;
   const m = r.stories.flatMap((x) => x.media).find((x) => !isVideo(x.src) || posterOf(x));
   const src = m ? (isVideo(m.src) ? posterOf(m) : m.src) : null;
-  const img = src ? (rc.url ? new URL(src, rc.url).href : src) : null;
+  const base = absUrl(rc.url);
+  const img = src ? (base ? new URL(src, base).href : src) : null;
   const title = esc(rc.title || 'What shipped');
   return [`<meta name="description" content="${esc(cut)}">`, `<meta property="og:type" content="article">`, `<meta property="og:title" content="${title}">`, `<meta property="og:description" content="${esc(cut)}">`,
-    rc.url ? `<meta property="og:url" content="${esc(rc.url)}">` : '', img ? `<meta property="og:image" content="${esc(img)}">` : '',
+    base ? `<meta property="og:url" content="${esc(base)}">` : '', img ? `<meta property="og:image" content="${esc(img)}">` : '',
     `<meta name="twitter:card" content="${img ? 'summary_large_image' : 'summary'}">`, `<meta name="twitter:title" content="${title}">`, `<meta name="twitter:description" content="${esc(cut)}">`, img ? `<meta name="twitter:image" content="${esc(img)}">` : ''].filter(Boolean).join('');
 }
 
@@ -503,7 +527,7 @@ document.addEventListener('click',e=>{const v=e.target.closest('[data-tlv]');if(
 const p=e.target.closest('[data-play]');if(p){const f=p.closest('.tlx');const vw=f.querySelector('.tl-'+f.dataset.view);const h=vw.querySelector('.tl-head');const x0=150,x1=vw.querySelector('svg').viewBox.baseVal.width-16;let t0=null;const dur=4000;cancelAnimationFrame(f._raf);
 const step=ts=>{t0??=ts;const k=Math.min(1,(ts-t0)/dur),x=x0+(x1-x0)*k;h.setAttribute('x1',x);h.setAttribute('x2',x);f.style.setProperty('--px',x);vw.querySelectorAll('.tl-b rect').forEach(r=>r.closest('.tl-b').classList.toggle('lit',+r.getAttribute('x')<=x&&+r.getAttribute('x')+ +r.getAttribute('width')>=x));if(k<1)f._raf=requestAnimationFrame(step)};f._raf=requestAnimationFrame(step)}});
 document.querySelectorAll('.fig').forEach(f=>{const read=f.querySelector('.ch-read');if(!read)return;const base=read.textContent;f.querySelectorAll('.ch-pt').forEach(g=>{const t=g.querySelector('title').textContent;g.addEventListener('mouseenter',()=>read.textContent=t);g.addEventListener('focus',()=>read.textContent=t);g.addEventListener('mouseleave',()=>read.textContent=base)})});
-const clips=[...document.querySelectorAll('video[data-clip]')],still=matchMedia('(prefers-reduced-motion: reduce)').matches;clips.forEach(v=>v.addEventListener('click',()=>{v._user=true;v.paused?v.play():v.pause()}));
+const clips=[...document.querySelectorAll('video[data-clip]')],still=matchMedia('(prefers-reduced-motion: reduce)').matches;if(still)clips.forEach(v=>{v.autoplay=false;v.pause()});clips.forEach(v=>v.addEventListener('click',()=>{v._user=true;v.paused?v.play():v.pause()}));
 if(!still&&clips.length){const vo=new IntersectionObserver(es=>es.forEach(e=>{const v=e.target;if(v._user)return;e.isIntersecting?v.play().catch(()=>{}):v.pause()}),{threshold:.5});clips.forEach(v=>vo.observe(v))}
 const ls=[...document.querySelectorAll('[data-toc]')];const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)ls.forEach(l=>l.classList.toggle('on',l.dataset.toc===e.target.id))}),{rootMargin:'-40% 0px -55% 0px'});ls.forEach(l=>{const t=document.getElementById(l.dataset.toc);t&&io.observe(t)})})()</script>`;
 
@@ -622,12 +646,22 @@ export function renderRecapMarkdown(r) {
 // a few more workstreams, and the link. Each post fits 280 characters, with
 // links counted as 23 the way X counts them.
 export const THREAD_MAX = 280;
-export const postLength = (t) => t.replace(/https?:\/\/\S+/g, 'x'.repeat(23)).length;
+// Weighted the way X's twitter-text counts: a link (or bare domain) is 23, an
+// emoji is 2, CJK and other characters outside the light ranges are 2 each.
+const LIGHT = [[0, 4351], [8192, 8205], [8208, 8223], [8242, 8247]];
+const LINK = /https?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|app|ai|co|so|sh|gg|me|ly|xyz|edu|gov)(?:\/\S*)?/gi;
+const graphemes = (t) => [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(t)].map((x) => x.segment);
+const weightOf = (g) => (/\p{Extended_Pictographic}/u.test(g) ? 2 : [...g].reduce((n, c) => { const cp = c.codePointAt(0); return n + (LIGHT.some(([a, b]) => cp >= a && cp <= b) ? 1 : 2); }, 0));
+// Pieces of a post: links whole, everything else one grapheme at a time.
+const pieces = (t) => String(t).normalize('NFC').split(new RegExp(`(${LINK.source})`, 'gi')).flatMap((x, i) => (i % 2 ? [{ s: x, w: 23 }] : graphemes(x).map((g) => ({ s: g, w: weightOf(g) })))).filter((x) => x.s);
+export const postLength = (t) => pieces(t).reduce((n, x) => n + x.w, 0);
 function fitPost(t) {
   if (postLength(t) <= THREAD_MAX) return t;
-  const cut = t.slice(0, THREAD_MAX - 1);
-  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.\n'));
-  return end > THREAD_MAX / 2 ? cut.slice(0, end + 1) : `${cut.replace(/\s+\S*$/, '')}…`;
+  let n = 0;
+  let cut = '';
+  for (const x of pieces(t)) { if (n + x.w > THREAD_MAX - 2) break; n += x.w; cut += x.s; }
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.\n'), cut.lastIndexOf('。'));
+  return end > cut.length / 2 ? cut.slice(0, end + 1) : `${cut.replace(/\s+\S*$/, '')}…`;
 }
 export function renderRecapThread(r) {
   const rc = r.rc;
@@ -640,7 +674,7 @@ export function renderRecapThread(r) {
   for (const st of r.stories) posts.push({ text: [stripMd(st.headline), stripMd(st.why)].filter(Boolean).join('\n\n'), attach: media(st.media) });
   const told = new Set(r.stories.map((x) => x.ws).filter(Boolean));
   for (const w of r.ws.filter((x) => !told.has(x)).slice(0, Math.max(0, 7 - posts.length))) posts.push({ text: [stripMd(w.title), stripMd(w.now)].filter(Boolean).join('\n\n'), attach: media(w.media) });
-  posts.push({ text: `The full write-up, with the numbers behind each change:\n${rc.url ?? '<link to the page>'}` });
+  posts.push({ text: `The full write-up, with the numbers behind each change:\n${absUrl(rc.url) ?? '<link to the page>'}` });
   return `${posts.map((p, i) => { const text = fitPost(p.text); return [`${i + 1}/${posts.length} (${postLength(text)} chars)`, text, ...(p.attach ?? []).map((a) => `[attach ${a}]`)].join('\n'); }).join('\n\n')}\n`;
 }
 

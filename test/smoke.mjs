@@ -100,9 +100,9 @@ assert.match(run('render', st, '--format', 'md'), /`#p2 src\/cache.ts:3`/);
 const rd = path.join(dir, 'recap');
 fs.mkdirSync(rd);
 const pr = (number, mergedAt, area) => ({ number, title: `t${number}`, url: `https://x/${number}`, mergedAt, additions: 10, deletions: 2, files: 1, area, oneLiner: `Change ${number}.` });
-fs.writeFileSync(path.join(rd, 'recap.json'), JSON.stringify({ kind: 'recap', title: 'Week', since: '2026-10-27', until: '2026-11-03', about: 'Acme is a web app with a database.', summary: 'Two things shipped.',
+fs.writeFileSync(path.join(rd, 'recap.json'), JSON.stringify({ kind: 'recap', title: 'Week', since: '2026-10-27', until: '2026-11-03', summary: 'Two things shipped.',
   prs: [pr(1, '2026-10-28T10:00:00Z', 'apps/web'), pr(2, '2026-10-30T10:00:00Z', 'packages/db'), pr(3, '2026-11-02T10:00:00Z', 'apps/web')],
-  themes: [{ name: 'Faster reads', title: 'Reads take 40 ms, down from 2 s', symptom: 'Pages took seconds to open.', now: 'They open at once.', wins: ['Reads are 10x cheaper.'], body: 'Reads got cheaper.', prs: [1, 3], diagram: { nodes: [{ id: 'a', label: 'read' }, { id: 'b', label: 'cache', change: 'new' }], edges: [{ from: 'a', to: 'b' }] } }, { name: 'Schema checks added', title: 'Schema checks cover all 3 tables', symptom: 'Search scanned every row.', body: 'One index.', prs: [2] }] }));
+  themes: [{ name: 'Faster reads', title: 'Reads take 40 ms, down from 2 s', symptom: 'Pages took seconds to open.', now: 'They open at once.', wins: ['Reads are 10x cheaper.'], body: 'Reads got cheaper.', prs: [1, 3], diagram: { nodes: [{ id: 'a', label: 'read' }, { id: 'b', label: 'cache', change: 'new' }], edges: [{ from: 'a', to: 'b' }] } }, { name: 'Schema', title: 'Schema checks cover all 3 tables', symptom: 'Search scanned every row.', body: 'One index.', prs: [2] }] }));
 assert.match(run('check', rd), /3 PRs, 2 workstreams, 3 days with merges/);
 const rhtml = fs.readFileSync(run('render', rd).trim(), 'utf8');
 assert.match(rhtml, /<svg class="chart"/);

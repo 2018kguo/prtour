@@ -10,13 +10,16 @@ export const isVideo = (src) => /^video/.test(mimeOf(src) ?? '');
 // Embedded media past this many bytes (before base64) is a `check` warning; `mediaBudgetMB` overrides it.
 export const MEDIA_BUDGET_MB = 12;
 export const STILL_MAX = 1600;
+// A file bigger than this is never read into the page.
+export const MAX_FILE_MB = 50;
 export const VIDEO_MAX = 1280;
 
 // A clip's poster is `<name>.poster.jpg` beside it (what `prtour media` writes), unless set.
 export const posterOf = (im) => im.poster ?? (isVideo(im.src) ? String(im.src).replace(/\.\w+$/, '.poster.jpg') : null);
 
 export function dataUrl(abs, src = abs) {
-  return abs && fs.existsSync(abs) ? `data:${mimeOf(src) ?? 'application/octet-stream'};base64,${fs.readFileSync(abs).toString('base64')}` : null;
+  if (!abs || !fs.existsSync(abs) || fs.statSync(abs).size > MAX_FILE_MB * 1e6) return null;
+  return `data:${mimeOf(src) ?? 'application/octet-stream'};base64,${fs.readFileSync(abs).toString('base64')}`;
 }
 
 // Every local file a list of media items embeds (clips and their posters), with sizes.
@@ -60,30 +63,48 @@ export function imageWidth(buf) {
   return null;
 }
 
-const has = (cmd) => { try { execFileSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }); return true; } catch { return false; } };
+// Probing by running the tool works on Windows too, where there is no `command -v`.
+const has = (cmd, flag = '-version') => { try { execFileSync(cmd, [flag], { stdio: 'ignore', timeout: 10000 }); return true; } catch { return false; } };
+const head = (file) => { const fd = fs.openSync(file, 'r'); const buf = Buffer.alloc(1 << 18); const n = fs.readSync(fd, buf, 0, buf.length, 0); fs.closeSync(fd); return buf.subarray(0, n); };
+
+// Output names keep letters in any script; a name already taken (by an earlier
+// input or a file on disk) gets -2, -3… unless `force` overwrites files on disk.
+export function outName(input, outDir, ext, taken, force = false) {
+  const stem = path.basename(input).replace(/\.[^.]+$/, '').normalize('NFC').replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '') || 'media';
+  for (let i = 1; ; i++) {
+    const base = path.join(outDir, i === 1 ? stem : `${stem}-${i}`);
+    const files = [`${base}.${ext}`, ...(ext === 'mp4' ? [`${base}.poster.jpg`] : [])];
+    if (files.some((f) => taken.has(f)) || (!force && files.some((f) => fs.existsSync(f)))) continue;
+    files.forEach((f) => taken.add(f));
+    return { base, renamed: i > 1 };
+  }
+}
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], maxBuffer: 1 << 26 });
 const ffmpegHas = (encoder) => { try { return execFileSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8' }).includes(` ${encoder} `); } catch { return false; } };
 
 // Stills become webp (ffmpeg with libwebp, or cwebp) or jpg (ffmpeg or sips) at
 // most 1600 px wide. Clips and GIFs become muted H.264 mp4 at most 1280 px wide,
 // plus a poster frame. Returns one record per input for the caller to print.
-export function compress(inputs, outDir, tools = { ffmpeg: has('ffmpeg'), cwebp: has('cwebp'), sips: has('sips') }) {
+export function compress(inputs, outDir, tools = { ffmpeg: has('ffmpeg'), cwebp: has('cwebp'), sips: has('sips', '--version') }, { force = false } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   const webp = tools.ffmpeg && ffmpegHas('libwebp');
+  const taken = new Set();
   return inputs.map((input) => {
-    const base = path.join(outDir, path.basename(input).replace(/\.\w+$/, '').replace(/[^\w.-]+/g, '-'));
     const before = fs.statSync(input).size;
     const ext = path.extname(input).slice(1).toLowerCase();
     const video = ['mp4', 'mov', 'webm', 'mkv', 'm4v', 'avi', 'gif'].includes(ext);
+    const outExt = video ? 'mp4' : webp || tools.cwebp ? 'webp' : 'jpg';
+    if (video && !tools.ffmpeg) return { input, error: 'clips need ffmpeg (brew install ffmpeg, apt install ffmpeg)' };
+    if (!video && !webp && !tools.cwebp && !tools.ffmpeg && !tools.sips) return { input, error: 'stills need ffmpeg, cwebp or sips' };
+    const { base, renamed } = outName(input, outDir, outExt, taken, force);
     if (video) {
-      if (!tools.ffmpeg) return { input, error: 'clips need ffmpeg (brew install ffmpeg, apt install ffmpeg)' };
       const out = `${base}.mp4`;
       const poster = `${base}.poster.jpg`;
       run('ffmpeg', ['-y', '-v', 'error', '-i', input, '-an', '-vf', `scale='trunc(min(${VIDEO_MAX},iw)/2)*2':-2,format=yuv420p`, '-c:v', 'libx264', '-preset', 'slow', '-crf', '28', '-movflags', '+faststart', out]);
       run('ffmpeg', ['-y', '-v', 'error', '-i', out, '-vf', 'thumbnail', '-frames:v', '1', '-q:v', '3', poster]);
-      return { input, out, poster, before, after: fs.statSync(out).size + fs.statSync(poster).size };
+      return { input, out, poster, renamed, before, after: fs.statSync(out).size + fs.statSync(poster).size };
     }
-    const width = imageWidth(fs.readFileSync(input));
+    const width = imageWidth(head(input));
     const scale = width == null || width > STILL_MAX;
     let out;
     if (webp || tools.cwebp) {
@@ -96,8 +117,8 @@ export function compress(inputs, outDir, tools = { ffmpeg: has('ffmpeg'), cwebp:
     } else if (tools.sips) {
       out = `${base}.jpg`;
       run('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '80', ...(scale ? ['--resampleWidth', String(STILL_MAX)] : []), input, '--out', out]);
-    } else return { input, error: 'stills need ffmpeg, cwebp or sips' };
-    return { input, out, before, after: fs.statSync(out).size };
+    }
+    return { input, out, renamed, before, after: fs.statSync(out).size };
   });
 }
 
