@@ -145,9 +145,11 @@ and reports each hit with a fix.
 ## Recaps: what shipped across many PRs
 
 A recap tells people what got fixed, what's new, and what got better over a
-stretch of work. Write for someone who wasn't there: lead with what people
-lived through, explain why it happened in plain words, show the result, and
-keep the engineering detail one click away.
+stretch of work. Write it like a strong product release post, the kind you
+could post on X or publish as a launch blog: a reader who has never heard of
+the product should get it from the top of the page and want to read on. Lead
+with outcomes, show the product with real screenshots and clips, explain
+every new name, and keep the engineering detail one click away.
 
 1. `npx -y prtour recap --author <login>[,<login>…] --since YYYY-MM-DD [--until …] [--repo o/r]`
    writes `recap.json` with every merged PR, plus `context/<number>.md` per PR:
@@ -165,14 +167,24 @@ keep the engineering detail one click away.
    one-line `otherPrs`. Check coverage: every user-visible change should land
    in a workstream.
 3. Each workstream, top to bottom (this is the order readers see):
-   - `title`: a newspaper headline. Say what changed and by how much, with
-     the number ("Scrolling an attached session: 16.7 ms to paint before,
-     0.15 ms now"). `check` warns when a fix or improvement headline has no
-     number. No paired slogans ("Big files load in seconds, and edits stay
-     put"), no cleverness, nothing a reader can't check.
-   - `name`: a 2 to 4 word plain noun phrase for the side nav ("Attached
-     scrolling"). Never a subtitle or tagline. The renderer writes each
-     section's meta line itself (PR count and merge dates); don't add one.
+   - `headline`: a newspaper headline that states the outcome, with the
+     number ("Scrolling an attached session: 16.7 ms to paint before, 0.15 ms
+     now"). `check` warns when a fix or improvement headline has no number.
+     No paired slogans ("Big files load in seconds, and edits stay put"), no
+     cleverness, nothing a reader can't check.
+   - `label`: the 2 to 4 word side-nav name, still an outcome: "PDFs 5×
+     faster", "Restores come back exact", not "Page renders" or "Chat
+     runtime". The renderer writes each section's meta line itself (PR count
+     and merge dates); don't add one.
+   - **Category titles.** `check` suggests a rewrite when a `headline` or
+     `label` ends in a category noun (performance, improvements, fixes,
+     updates, refactoring, infra, runtime, cleanup, maintenance, platform,
+     billing, pipeline…) and has no digit or outcome word ("faster", "fixed",
+     "now", "no longer"…). "Bug fixes", "Chat runtime" and "Authentication
+     improvements" get the suggestion; "Dark mode arrives", "Memory leak
+     plugged" and "PDFs 5× faster" don't. It is a narrow net, so still read
+     every title and ask whether it says what happened. (`title` and `name`
+     still work as older spellings of `headline` and `label`.)
    - `symptom` and `howBad`: what people lived through, in their words, with
      no internals, then how often or how badly with a sourced number.
      Not "terminals came back from a replayed ANSI repaint"; instead "after a
@@ -183,7 +195,7 @@ keep the engineering detail one click away.
      character, such as a flag emoji, even when it is several code points").
    - Section headers are fixed by the renderer (Fixes, New features,
      Improvements, Why it happened, How it works). Don't invent punchy ones.
-   - One or two visuals, never more:
+   - One to three visuals, never more (`check` warns past three):
      - `timeline`: the clearest way to show contention or waiting. Rows over
        a few seconds, Before and After, with a play button:
        `{"caption", "length": 20, "unit": "ms", "rows": ["Your wheel step",
@@ -197,7 +209,11 @@ keep the engineering detail one click away.
        "2026-11-03T08", "label": "8am", "y": 13.8, "note": "p99 2.3 s",
        "hi": true}], "marks": [{"x": "2026-11-03T18", "label": "#123
        deployed"}]}`. With 12 points or fewer it draws labelled bars.
-     - `diagram` (Before/After map), `mermaid`, `steps`, `images`.
+     - `diagram` (Before/After map), `mermaid`, `steps`.
+     - `media`: real screenshots and short clips of the product,
+       `[{"src": "media/grid.webp", "caption": "…"}]`, paths relative to the
+       recap folder (see "Screenshots and clips" below). A chart alone
+       doesn't sell a change; when there is a UI, show it.
    - `wins`: 3 to 5 one-line results that lead with the number, each with
      its `prs`.
    - `diffs`: at most two targeted snippets of the code that carries the
@@ -209,21 +225,112 @@ keep the engineering detail one click away.
      `[{"title", "body", "prs", "results"}]`. One readable item per change.
      Don't put PR lists in titles; cite PRs in `prs` or inline as `#12345`.
    - `asked`: what the person set out to do, paraphrased from the lane context.
-4. Top of the report: `title`, `byline`, and a `summary` of two or three
-   sentences that opens with what people were living with. The overview lists
-   are built from each workstream's `symptom`/`title` and `now`, so write
-   those well. Add `dayNotes` and readable `lanes` names.
+4. Top of the report, which is what a newcomer reads first:
+   - `title` (the post's headline, e.g. "Acme 2.4: big notebooks open in
+     under a second"), `byline`, and `about`: one plain sentence on what the
+     product is, for someone who has never heard of it ("Acme is a notes app
+     that keeps every notebook on your own disk"). `check` suggests it when
+     it's missing.
+   - `summary`: two or three sentences that open with what people were
+     living with.
+   - `hero`: the top stories, a lead story plus a grid of the rest.
+     `{"stories": [{"workstream": "<label>", "headline", "why", "media":
+     [{"src", "caption"}]}], "tldr": ["…", "…", "…"]}`. Pick the 2 to 4
+     biggest outcomes; `check` suggests trimming past 4, since a hero that lists
+     everything stops being one. Each story's `headline` and `why` default to
+     its workstream's `headline` and `now`, and its media to the
+     workstream's first `media` item; `why` is one line on why it matters to
+     the reader. Every story needs a visual: its media, or else the card
+     shows a compact copy of its workstream's chart or timeline. `tldr` is 2
+     to 4 short bullets that cover all the top stories.
+   - The lead story's kind leads the page (an improvement can come before
+     Fixes), and top stories lead their group. `"order": ["feature", "fix",
+     "improvement"]` sets the order by hand.
+   - `glossary`: "Meet the new pieces". Every new package, engine, library or
+     internal name a reader meets, as `{"term", "what", "why"}`: `what` is one
+     plain sentence on what it is, `why` is why it matters here. The first use
+     of each term in the text links to its entry and shows `what` on hover.
+     `check` suggests an entry when a headline, label, `about`, `summary`,
+     top story or TL;DR uses something that looks like a code or package
+     name: anything in backticks, `@scope/name`, camelCase, SCREAMING_CASE,
+     a file name, or kebab-case with a digit or three or more parts
+     (`lite-index-v2`). Plain English compounds ("open-source",
+     "two-factor") pass, and so does a two-part name like `lite-index`, so
+     put new names in backticks.
+   - `url`: where the page will be hosted, as an absolute link
+     (`https://…`). The Open Graph and X card tags use it to make the share
+     image absolute, and the thread ends with it.
+   - `"private": true` (or `render --no-links`) leaves out the repo name and
+     PR links, for a public post about a private repo. PR numbers stay as
+     plain text.
+   - The overview lists are built from each workstream's `symptom`/`headline`
+     and `now`, so write those well. Add `dayNotes`, and a readable name in
+     `lanes` for every lane key, or the lanes chart shows raw session ids
+     (`check` lists the missing ones).
 5. Every number comes from a PR, a context file or measured evidence. Never
    estimate. The writing rules above apply, and `check` enforces them, plus the
-   limits on visuals and diffs per workstream. Then `render` (HTML),
-   `--format pdf`, `--format md`, or `show`. The PDF is compact by design
-   (10 pt, PR lists left out); the HTML holds everything.
+   limits on visuals and diffs per workstream; it fails only on those.
+   Release-post advice (titles, glossary, hero, media, links) prints under
+   "Suggestions" and doesn't fail it, so read it and act on what fits. Then `render` (HTML),
+   `--format pdf`, `--format md`, `--format thread`, or `show`. The PDF is
+   compact by design (10 pt, PR lists left out, clips shown as their poster
+   frame); the HTML holds everything. `--format thread` prints a 5 to 8 post
+   X thread draft: an opener (with the TL;DR, or the TL;DR as the next post
+   when it doesn't fit), one post per top story with the file to attach, a
+   few more workstreams that each read on their own, and the link. Each post
+   fits 280 characters, counted the way X counts (CJK and emoji 2, links 23).
+   `--media-dir <dir>` copies every file to attach into one folder to ship.
+   A story whose only visual is a chart gets a PNG of it, drawn with the same
+   Chrome as the PDF; without Chrome its post says it has no picture. Chart
+   x labels that would collide are drawn at an angle; shorter labels read
+   better, and `check` says when that happens.
 6. Read it back as someone who wasn't there. If a headline needs the body to
-   make sense, or a symptom names an internal, rewrite it.
+   make sense, a symptom names an internal, or a name appears that the
+   glossary doesn't explain, rewrite it.
 
 The page follows common critiques of generated design, so don't fight it:
 one type family, no labels above headings, no icon tiles or colored card
-borders, no identical card grids, no metric strips, nothing smaller than 14px.
+borders, no metric strips, nothing smaller than 14px. The top-stories grid is
+the one card grid, and it carries real pictures.
+
+### Screenshots and clips
+
+Real pictures of the product are what make a release post. Find them before
+you write:
+
+- **Local session scratchpads**: agent sessions often saved screenshots and
+  recordings while verifying the work (temp and scratchpad folders,
+  `*.png`/`*.mp4`/`*.webm`/`*.gif` near the session's transcript).
+- **Worktrees** for the PRs: `docs/`, `screenshots/`, test artifacts,
+  Playwright traces and videos, README images the PR added or changed.
+- **PR bodies and comments**: images and videos attached to the PR
+  (`gh pr view <n> --json body,comments`, then download each
+  `user-attachments` URL with `gh api` or `curl -L`).
+- If nothing exists and the change has a UI, take a screenshot or a short
+  screen recording of the running product.
+
+Screen every image and frame before you include it. Look at it yourself:
+no customer names or data, personal details, emails, tokens or keys, internal
+URLs or hostnames, private repos, or other people's messages. Crop or blur, or
+leave it out. The page is meant to be shared.
+
+Then compress: `npx -y prtour media <file…> --dir <recap folder>` uses
+whatever the machine has (ffmpeg, cwebp or sips). Stills become webp or jpg
+at most 1600 px wide; clips and GIFs become muted H.264 mp4 at most 1280 px
+wide, plus a `<name>.poster.jpg` poster frame (a `<name>-poster.jpg` beside a
+clip is found too). Files go to `<recap folder>/media`; a name that is taken
+gets `-2`, `-3`, and nothing is overwritten without `--force`. It prints
+`media` entries to paste, with `src` relative to the recap folder; write a
+caption for each that says what the reader is looking at. Keep clips short (5
+to 20 s).
+
+The HTML embeds media as data URIs. Stills under 500 KB are embedded at each
+use; a clip or large file used twice (a top story and its section) is
+embedded once and shared. `check` suggests trimming when the total passes
+12 MB (`"mediaBudgetMB"` changes the budget) or a clip has no poster, and a
+file over 50 MB is left out. Clips play muted and looped, and a click pauses
+them. Markdown links the files, so ship the media folder alongside it.
+
 
 ## tour.json
 
