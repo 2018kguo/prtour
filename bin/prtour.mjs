@@ -12,7 +12,8 @@ import { detect } from '../src/term-images.mjs';
 import { htmlToPdf } from '../src/pdf.mjs';
 import { findLanes } from '../src/lanes.mjs';
 import { iconNames, resolveIcons } from '../src/icons.mjs';
-import { renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
+import { renderRecapHTML, renderRecapMarkdown, renderRecapTerminal, renderRecapThread, resolveRecap, scaffoldRecap } from '../src/recap.mjs';
+import { MEDIA_BUDGET_MB, budgetWarning, compress, embeddedFiles, isVideo, posterOf } from '../src/media.mjs';
 
 const rel = (p) => { const r = path.relative(process.cwd(), p); return r.startsWith('..') ? p : r || '.'; };
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -25,7 +26,7 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
   prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
   prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
   prtour render [dir]        write a self-contained HTML file (default <dir>/index.html)
-           --format md|term|pdf  Markdown (PR comment), terminal, or PDF (needs Chrome)
+           --format md|term|pdf|thread  Markdown, terminal, PDF (needs Chrome), or (recaps) an X thread draft
            -o <file>         output path   --split  side-by-side   --wrap  wrap lines
   prtour show [dir]          the tour in the terminal (ANSI, paged)
            --images kitty|iterm|none   inline images; default probes the terminal
@@ -35,6 +36,7 @@ const HELP = `prtour: guided, agent-annotated reviews of a diff, rendered with @
            --author <login> --since YYYY-MM-DD [--until] [--repo o/r]   (default: you, last 7 days)
   prtour post [dir]          post the notes as a GitHub review, each on its line (one per PR)
            --link <url>      link the full tour   --dry-run  print the review, post nothing
+  prtour media <file…>       compress screenshots and clips for a recap (-o <dir>, default ./media)
   prtour skill [--install]   print the agent skill (or write .claude/skills/prtour/SKILL.md)
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
@@ -80,11 +82,20 @@ function loadRecap(dir) {
   let rc;
   try { rc = JSON.parse(fs.readFileSync(path.join(dir, 'recap.json'), 'utf8')); } catch (e) { die(`${dir}/recap.json is not valid JSON: ${e.message}`); }
   const r = resolveRecap(rc);
-  for (const im of (rc.workstreams ?? rc.themes ?? []).flatMap((t) => [...(t.images ?? []), t.compare?.before, t.compare?.after]).filter(Boolean)) {
-    if (!im?.src || /^https?:/.test(im.src)) continue;
+  // Media paths are relative to the recap folder; resolve them, and their posters, here.
+  const items = [...(rc.workstreams ?? rc.themes ?? []).flatMap((t) => [...(t.media ?? []), ...(t.images ?? []), t.compare?.before, t.compare?.after]), ...(rc.hero?.stories ?? []).flatMap((s) => s.media ?? [])].filter(Boolean);
+  for (const im of items) {
+    if (!im?.src) { r.warnings.push('media item without src'); continue; }
+    if (/^https?:/.test(im.src)) continue;
     im.abs = path.resolve(dir, im.src);
-    if (!fs.existsSync(im.abs)) r.warnings.push(`image ${im.src} not found (paths are relative to ${rel(dir)})`);
+    if (!fs.existsSync(im.abs)) { r.warnings.push(`media ${im.src} not found (paths are relative to ${rel(dir)})`); continue; }
+    if (!isVideo(im.src)) continue;
+    const poster = posterOf(im);
+    if (poster && fs.existsSync(path.resolve(dir, poster))) im.posterAbs = path.resolve(dir, poster);
+    else r.warnings.push(`clip ${im.src} has no poster frame (the PDF and share cards use it); run \`prtour media\` on the original, or set "poster"`);
   }
+  const budget = budgetWarning(embeddedFiles(items.filter((im) => im.src), dir), rc.mediaBudgetMB ?? MEDIA_BUDGET_MB);
+  if (budget) r.warnings.push(budget);
   return r;
 }
 
@@ -215,6 +226,7 @@ async function render(dir, flags) {
   const r = load(dir);
   await withIcons(r, r.tour);
   const fmt = flags.format ?? (flags.out?.endsWith('.md') ? 'md' : flags.out?.endsWith('.pdf') ? 'pdf' : 'html');
+  if (fmt === 'thread') die('--format thread is for recaps');
   if (fmt === 'pdf') {
     for (const w of r.warnings) console.error(`warning: ${w}`);
     const out = path.resolve(flags.out ?? path.join(dir, 'review.pdf'));
@@ -256,7 +268,7 @@ async function renderRecap(dir, flags) {
     try { htmlToPdf(await renderRecapHTML(r, { print: true }), out); } catch (e) { die(e.message); }
     return console.log(out);
   }
-  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'term' ? renderRecapTerminal(r, { color: process.stdout.isTTY && !flags['no-color'] }) : await renderRecapHTML(r);
+  const text = fmt === 'md' ? renderRecapMarkdown(r) : fmt === 'thread' ? renderRecapThread(r) : fmt === 'term' ? renderRecapTerminal(r, { color: process.stdout.isTTY && !flags['no-color'] }) : await renderRecapHTML(r);
   if (fmt !== 'html' && !flags.out) return process.stdout.write(text);
   const out = path.resolve(flags.out ?? path.join(dir, 'index.html'));
   fs.writeFileSync(out, text);
@@ -431,6 +443,24 @@ function post(dir, flags) {
   }
 }
 
+// Screenshots and clips, made small enough to embed: stills to webp/jpg at most
+// 1600 px wide, clips to muted H.264 mp4 at most 1280 px wide plus a poster.
+function media(files, flags) {
+  if (!files.length) die('usage: prtour media <file…> [-o <dir>]');
+  for (const f of files) if (!fs.existsSync(f)) die(`${f} not found`);
+  const outDir = path.resolve(flags.out ?? 'media');
+  let res;
+  try { res = compress(files, outDir); } catch (e) { die(`compression failed: ${String(e.stderr ?? e.message).trim()}`); }
+  const mb = (n) => `${(n / 1e6).toFixed(2)} MB`;
+  for (const x of res) {
+    if (x.error) { console.error(`${x.input}: ${x.error}`); continue; }
+    console.log(`${x.input} → ${rel(x.out)}${x.poster ? ` + ${rel(x.poster)}` : ''}  ${mb(x.before)} → ${mb(x.after)}`);
+  }
+  const ok = res.filter((x) => x.out);
+  if (ok.length) console.log(`\nmedia entries (src is relative to the recap folder; write the captions):\n${JSON.stringify(ok.map((x) => ({ src: path.relative(process.cwd(), x.out), caption: '' })), null, 2)}`);
+  if (res.some((x) => x.error)) process.exit(1);
+}
+
 function skill(flags) {
   const text = fs.readFileSync(path.join(ROOT, 'skills', 'prtour', 'SKILL.md'), 'utf8');
   if (!flags.install) return process.stdout.write(text);
@@ -453,6 +483,7 @@ const COMMANDS = {
   post: () => post(findDir(flags.dir ?? pos[0]), flags),
   skill: () => skill(flags),
   recap: () => recap(flags),
+  media: () => media(pos, flags),
 };
 if (cmd === '-h' || cmd === '--help' || cmd === 'help' || flags.help || flags.h) console.log(HELP);
 else if (COMMANDS[cmd]) await COMMANDS[cmd]();

@@ -6,7 +6,45 @@
   "repo": "2018kguo/ptyd",
   "since": "2026-10-27",
   "until": "2026-11-03",
+  "url": "https://2018kguo.github.io/prtour/examples/ptyd-recap/",
+  "about": "ptyd is a terminal workspace for coding agents: you group terminals by task, run Codex, Claude Code and shells inside them, and come back later to watch or take over while they keep running.",
   "summary": "Restarting ptyd brought terminals back subtly wrong, agent sessions from other tabs were invisible to it, and scrolling an attached agent lagged a frame behind a direct terminal. Over 27 PRs, restores became exact, terminals moved into persistent groups with a searchable grid of live previews, and scrolling paints in 0.15 ms instead of 16.7 ms.",
+  "hero": {
+    "stories": [
+      {
+        "workstream": "Groups keep terminals",
+        "headline": "Terminals live in named groups that keep running after you close the window",
+        "why": "You can put each task in its own group, leave, and come back to every terminal where you left it."
+      },
+      {
+        "workstream": "8 live panes, searchable",
+        "headline": "Watch 8 terminals at once and search them by what is on screen",
+        "why": "Finding the agent that printed an error no longer means opening tabs one by one."
+      }
+    ],
+    "tldr": [
+      "New: named groups of terminals that outlive the window, with a live preview of each one.",
+      "New: a grid of up to 8 live panes, and `/` to search every screen and its scrollback.",
+      "Better: restarts restore terminals exactly, and scrolling an agent paints in 0.15 ms instead of 16.7 ms."
+    ]
+  },
+  "glossary": [
+    {
+      "term": "PTY",
+      "what": "A pseudo-terminal: the pipe a program like a shell or Codex reads keys from and writes its screen to.",
+      "why": "ptyd owns these, which is why your sessions survive closing the window."
+    },
+    {
+      "term": "checkpoint",
+      "what": "A snapshot of a terminal that ptyd saves to disk so it can bring the terminal back after a restart.",
+      "why": "What it holds decides whether a restored terminal looks exactly like the one you left."
+    },
+    {
+      "term": "grapheme",
+      "what": "What a reader sees as one character, such as a flag emoji, even when it is several code points.",
+      "why": "Agent output is full of them, so how fast ptyd splits them sets how fast it keeps up."
+    }
+  ],
   "dayNotes": {
     "2026-10-27": "Exact checkpoints and idle compaction.",
     "2026-10-28": "Session overview, Unicode speedup, Codex and Claude import, home-row keys.",
@@ -16,9 +54,9 @@
   "workstreams": [
     {
       "kind": "fix",
-      "name": "Exact restore",
+      "label": "Restores come back exact",
       "icon": "rotate-ccw",
-      "title": "Restarted terminals now come back exact, with 7 kinds of lost state checked byte for byte",
+      "headline": "Restarted terminals now come back exact, with 7 kinds of lost state checked byte for byte",
       "symptom": "After ptyd restarted, your terminals came back subtly wrong: saved cursor positions gone, a full-screen app's second screen gone, and keys caught mid-sequence lost.",
       "howBad": "Every version 1 checkpoint was a repaint of up to about 300 KiB, so every restore went through it. A malformed saved screen could also panic ptyd on a later resize (#9).",
       "now": "Checkpoints store the emulator's exact snapshot, old version 1 files still load, and malformed history is rejected before it replaces the terminal.",
@@ -158,9 +196,9 @@
     },
     {
       "kind": "fix",
-      "name": "Preview rendering",
+      "label": "Previews stop spilling",
       "icon": "panels-top-left",
-      "title": "Terminal previews: 2,858 cells of background spill before the fix, zero after",
+      "headline": "Terminal previews: 2,858 cells of background spill before the fix, zero after",
       "symptom": "Previews of Codex and Claude cut off their footers and the bottom of the input box, and pane colors bled into the gaps between panes.",
       "howBad": "A read-only check of live snapshots found 2,858 cells painted outside their panes before #24.",
       "now": "Previews keep the last painted row in view, and every cell outside a pane border matches the frame drawn with no previews, for one through eight panes.",
@@ -235,9 +273,9 @@
     },
     {
       "kind": "feature",
-      "name": "Codex and Claude import",
+      "label": "Import running agents",
       "icon": "bot",
-      "title": "Codex and Claude sessions from other tabs open in ptyd; a live check finds 5 of 5",
+      "headline": "Codex and Claude sessions from other tabs open in ptyd; a live check finds 5 of 5",
       "symptom": "Codex and Claude conversations started in another terminal tab were invisible to ptyd, so an agent's work lived in two places.",
       "now": "Pick a running Codex or Claude conversation in ptyd and press Enter. Detaching returns to the list while the native worker keeps running.",
       "demo": [
@@ -358,9 +396,9 @@
     },
     {
       "kind": "feature",
-      "name": "Persistent groups",
+      "label": "Groups keep terminals",
       "icon": "folder-tree",
-      "title": "Persistent terminal groups replace the flat picker, and the dock lists every working key",
+      "headline": "Persistent terminal groups replace the flat picker, and the dock lists every working key",
       "symptom": "ptyd sessions were a flat list. Seeing which needed attention meant fetching each one, and once finished work piled up the picker was hard to scan.",
       "now": "Open a named group of terminals with `ptyd new`, `ptyd ls` or `ptyd attach`, preview and take over any of them, and press quick `jk` to go back from any level.",
       "demo": [
@@ -369,7 +407,7 @@
         "Press Enter to open the group; the dock at the bottom lists every key that works for the selection."
       ],
       "explain": "ptyd already kept terminals alive across disconnects. What was missing was a way to see them as one piece of work. A group is a saved record that holds several terminals, so a person or an agent can come back to it later, and a keyboard claim decides whose input reaches a terminal when both are there.",
-      "images": [
+      "media": [
         {
           "src": "shots/preview.png",
           "caption": "From the README demo: a group's terminals on the left and a read-only live preview of the selected one."
@@ -466,9 +504,9 @@
     },
     {
       "kind": "feature",
-      "name": "Live grid and search",
+      "label": "8 live panes, searchable",
       "icon": "layout-grid",
-      "title": "Up to 8 live terminal previews in one grid, searchable by screen text and scrollback",
+      "headline": "Up to 8 live terminal previews in one grid, searchable by screen text and scrollback",
       "symptom": "Checking on several agents meant opening each terminal in turn, and `ptyd ls` printed a table that looked empty.",
       "now": "Watch up to seven pinned panes plus the selected terminal, and press `/` to find a session by what is on its screen or in its scrollback.",
       "demo": [
@@ -477,7 +515,7 @@
         "Press `/` and type text from any screen to jump to that terminal."
       ],
       "explain": "A preview is a read-only copy of a terminal's current screen. ptyd reads one atomic snapshot per terminal and paints only the cells inside its panel, so watching never resizes the program, counts as a viewer or takes the keyboard.",
-      "images": [
+      "media": [
         {
           "src": "shots/grid.png",
           "caption": "From the README demo: seven pinned panes and the selected terminal in one group."
@@ -548,9 +586,9 @@
     },
     {
       "kind": "improvement",
-      "name": "Attached scrolling",
+      "label": "Scroll lag 111× lower",
       "icon": "mouse",
-      "title": "Scrolling an attached Codex or Claude session: 16.7 ms to paint before, 0.15 ms now",
+      "headline": "Scrolling an attached Codex or Claude session: 16.7 ms to paint before, 0.15 ms now",
       "symptom": "Scrolling Codex or Claude through ptyd lagged a frame behind a direct terminal on every wheel step.",
       "howBad": "Each wheel step waited a median 16.7 ms for the next 60 Hz paint tick, and every frame resent 6,162 bytes at 120×30.",
       "now": "Median wheel-to-paint is 0.15 ms at 120×30 and 0.21 ms at 240×64, against 0.03 to 0.06 ms for a direct PTY.",
@@ -720,9 +758,9 @@
     },
     {
       "kind": "improvement",
-      "name": "Unicode throughput",
+      "label": "Unicode 6× faster",
       "icon": "languages",
-      "title": "Unicode output: mixed graphemes processed 6× faster, CJK text 5× faster",
+      "headline": "Unicode output: mixed graphemes processed 6× faster, CJK text 5× faster",
       "symptom": "Output heavy with emoji or Chinese, Japanese and Korean text moved through ptyd at 21 to 23 MB/s, against 366 to 408 MB/s for plain logs.",
       "howBad": "The emulator allocated about 154 MB of memory for every MiB of mixed Unicode output it read.",
       "now": "Mixed graphemes run at 129 MB/s and CJK at 118 MB/s, allocating about 1.25 MB and 1.48 MB per MiB.",
@@ -864,9 +902,9 @@
     },
     {
       "kind": "improvement",
-      "name": "Output memory",
+      "label": "98% fewer allocations",
       "icon": "memory-stick",
-      "title": "Allocations per read of Claude output: 6,153 before, 119 now, with 33% fewer bytes",
+      "headline": "Allocations per read of Claude output: 6,153 before, 119 now, with 33% fewer bytes",
       "symptom": "Every read of Claude output made ptyd create a new string for each line, leaving thousands of small objects for Go's garbage collector.",
       "howBad": "Reading the Claude fixture made 6,153 allocations and 1,056.6 KiB of garbage per read, and about 95% of those bytes came from the line store.",
       "now": "Retained lines share an append-only text arena, and idle terminals free unused emulator storage when their checkpoint is due.",

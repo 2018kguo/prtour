@@ -140,14 +140,33 @@ largest files, and what the person asked the agent that opened the PR. That
 last part is read from local Claude Code and Codex transcripts and never
 leaves your machine; pass `--no-lanes` to skip it.
 
-The agent groups the PRs into workstreams of three kinds: fixes, new
-features worth a demo, and improvements. Each leads with what people lived
-through and how bad it was, explains the cause in plain words, and shows the
-result. The tools are a Before/After timeline with a play button, a chart of
-real measurements with deploys marked, and a few lines of the diff that
-carry the idea. Engineering detail is folded away. `prtour check` holds the
-writing to plain, sourced, newspaper-style prose. The recap renders as HTML,
-a compact PDF, Markdown for Slack or GitHub, or in the terminal.
+The agent writes it as a product release post, for readers who have never
+heard of the product:
+
+- **Top stories.** A one-line `about` says what the product is. Then a lead
+  story and a grid of the next biggest, each with a headline, a line on why it
+  matters, and a real screenshot or clip, followed by a short TL;DR.
+- **Headlines that say what happened.** Every section has a headline with the
+  outcome and a 2 to 4 word nav label such as "PDFs 5× faster". `prtour check`
+  flags titles that only name an area, like "Page renders".
+- **Meet the new pieces.** A glossary explains each new engine, package or
+  internal name in one plain sentence. The first use of each term links to
+  it. `check` warns when a headline uses a code-looking name the glossary
+  doesn't cover.
+- **Fixes, New and Better** below that, each leading with what people lived
+  through, why it happened, and the result: a Before/After timeline, a chart
+  of real measurements, the screenshots, and a few lines of the diff that
+  carry the idea. The biggest story's group goes first. Engineering detail is
+  folded away.
+
+Screenshots and clips are embedded in the page. `prtour media` compresses
+them first: stills to webp or jpg at most 1600 px wide, clips to muted H.264
+mp4 at most 1280 px wide with a poster frame, using ffmpeg, cwebp or sips.
+Clips play muted and looped while on screen. The page carries Open Graph and
+X card tags, and `--format thread` drafts an X thread with one post per top
+story and the file to attach to each. The recap also renders as a compact
+PDF (clips as their poster frames), Markdown that links the media files, or
+in the terminal.
 
 ![A recap section: before and now, why it happened, and a chart of real measurements](docs/recap-section.png)
 
@@ -165,12 +184,13 @@ prtour [target…]           init + open in the browser
 prtour init [target…]      fetch the diff, scaffold .prtour/<slug>/tour.json (--stack, --dir)
 prtour hunks [file…]       list hunk indices; --lines adds old/new line numbers
 prtour check [dir]         validate tour.json against the diff (exit 1 on warnings)
-prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf; --split; --wrap)
+prtour render [dir]        self-contained HTML (-o file; --format md|term|pdf|thread; --split; --wrap)
 prtour show [dir]          terminal view
 prtour open [dir]          live-reload server + reviewer feedback
 prtour feedback [dir]      reviewer comments as Markdown (--clear)
 prtour post [dir]          notes as an inline GitHub review (--link, --dry-run)
 prtour recap               what shipped across many PRs (--author, --since, --until, --repo, --no-lanes)
+prtour media <file…>       compress screenshots and clips for a recap (-o <dir>, default ./media)
 prtour skill [--install]   agent instructions
 
 target: 123 | https://github.com/o/r/pull/123 | o/r#123 | main...HEAD | file.patch | -
